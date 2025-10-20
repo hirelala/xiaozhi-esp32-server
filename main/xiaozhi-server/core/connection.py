@@ -781,6 +781,8 @@ class ConnectionHandler:
         content_arguments = ""
         self.client_abort = False
         emotion_flag = True
+        first_token_time = None  # 记录第一个token的时间
+        llm_start_time = time.time()  # 记录LLM开始时间
         for response in llm_responses:
             if self.client_abort:
                 break
@@ -816,6 +818,14 @@ class ConnectionHandler:
                 emotion_flag = False
 
             if content is not None and len(content) > 0:
+                # 记录第一个token的时间
+                if first_token_time is None:
+                    first_token_time = time.time()
+                    llm_response_time = first_token_time - llm_start_time
+                    self.logger.bind(tag=TAG).info(
+                        f"⏱️ LLM首个token响应时间: {llm_response_time:.3f}秒"
+                    )
+                
                 if not tool_call_flag:
                     response_message.append(content)
                     self.tts.tts_text_queue.put(
@@ -888,6 +898,12 @@ class ConnectionHandler:
                 )
             )
         self.llm_finish_task = True
+        
+        # 记录LLM总响应时间
+        llm_total_time = time.time() - llm_start_time
+        self.logger.bind(tag=TAG).info(
+            f"⏱️ LLM总响应时间: {llm_total_time:.3f}秒"
+        )
         # 使用lambda延迟计算，只有在DEBUG级别时才执行get_llm_dialogue()
         self.logger.bind(tag=TAG).debug(
             lambda: json.dumps(
