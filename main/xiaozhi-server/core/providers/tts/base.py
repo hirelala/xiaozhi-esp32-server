@@ -43,6 +43,7 @@ class TTSProviderBase(ABC):
         self.tts_text_buff = []
         self.punctuations = (
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -50,13 +51,17 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ":",
+            "、",
         )
         self.first_sentence_punctuations = (
             "，",
+            ",",
             "~",
             "、",
             ",",
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -64,6 +69,7 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ":",
         )
         self.tts_stop_request = False
         self.processed_chars = 0
