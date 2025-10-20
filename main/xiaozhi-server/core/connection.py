@@ -753,21 +753,47 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
+            # 获取完整对话内容
+            full_dialogue = self.dialogue.get_llm_dialogue_with_memory(
+                memory_str, self.config.get("voiceprint", {})
+            )
+            
+            # 打印完整的LLM请求信息
+            self.logger.bind(tag=TAG).info("="*80)
+            self.logger.bind(tag=TAG).info("🔵 完整LLM请求信息:")
+            self.logger.bind(tag=TAG).info(f"Session ID: {self.session_id}")
+            self.logger.bind(tag=TAG).info(f"Intent Type: {self.intent_type}")
+            self.logger.bind(tag=TAG).info(f"使用Functions: {functions is not None and self.intent_type == 'function_call'}")
+            self.logger.bind(tag=TAG).info(f"对话消息数量: {len(full_dialogue)}")
+            
+            # 计算总字符数
+            total_chars = sum(len(json.dumps(msg, ensure_ascii=False)) for msg in full_dialogue)
+            self.logger.bind(tag=TAG).info(f"总字符数: {total_chars} (~{total_chars//4} tokens估算)")
+            
+            # 打印完整对话内容
+            self.logger.bind(tag=TAG).info("完整对话内容 (Dialogue):")
+            self.logger.bind(tag=TAG).info(json.dumps(full_dialogue, indent=2, ensure_ascii=False))
+            
+            # 如果有functions，也打印出来
+            if self.intent_type == "function_call" and functions is not None:
+                functions_chars = len(json.dumps(functions, ensure_ascii=False))
+                self.logger.bind(tag=TAG).info(f"Functions字符数: {functions_chars} (~{functions_chars//4} tokens估算)")
+                self.logger.bind(tag=TAG).info("可用Functions:")
+                self.logger.bind(tag=TAG).info(json.dumps(functions, indent=2, ensure_ascii=False))
+            
+            self.logger.bind(tag=TAG).info("="*80)
+
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
                 llm_responses = self.llm.response_with_functions(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    full_dialogue,
                     functions=functions,
                 )
             else:
                 llm_responses = self.llm.response(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    full_dialogue,
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
