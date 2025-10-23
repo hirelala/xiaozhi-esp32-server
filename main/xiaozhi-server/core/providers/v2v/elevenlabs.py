@@ -78,14 +78,9 @@ class V2VProvider(V2VProviderBase):
             if not self.signed_url:
                 ws_url += f"&api_key={self.api_key}"
             
-            # Log the URL (with masked API key for security)
-            masked_url = ws_url.replace(self.api_key, "***API_KEY***") if self.api_key else ws_url
-            self.logger.bind(tag=TAG).info(f"Connecting to ElevenLabs Agents for device: {device_id}")
-            self.logger.bind(tag=TAG).info(f"WebSocket URL: {masked_url}")
-            
             # Connect to ElevenLabs WebSocket
             conn.elevenlabs_ws = await websockets.connect(ws_url)
-            self.logger.bind(tag=TAG).info(f"✅ WebSocket connected successfully")
+            self.logger.bind(tag=TAG).info(f"✅ ElevenLabs WebSocket connected for device: {device_id}")
             
             # Send initial configuration
             # DON'T override prompt - agent config doesn't allow it
@@ -106,10 +101,7 @@ class V2VProvider(V2VProviderBase):
                 }
             }
             
-            self.logger.bind(tag=TAG).info(f"Sending init message: {json.dumps(init_message, indent=2)}")
-            
             await conn.elevenlabs_ws.send(json.dumps(init_message))
-            self.logger.bind(tag=TAG).info("Sent configuration to ElevenLabs")
             
             # Start receiving audio from ElevenLabs
             conn.elevenlabs_receive_task = asyncio.create_task(
@@ -117,9 +109,7 @@ class V2VProvider(V2VProviderBase):
             )
             
             conn.v2v_active = True
-            self.logger.bind(tag=TAG).info("ElevenLabs Agents conversation started")
-            self.logger.bind(tag=TAG).info(f"✅ Set conn.v2v_active = {conn.v2v_active}")
-            self.logger.bind(tag=TAG).info("🎧 Waiting for audio from hardware and ElevenLabs...")
+            self.logger.bind(tag=TAG).info("✅ ElevenLabs conversation started")
 
         except Exception as e:
             self.logger.bind(tag=TAG).error(
@@ -135,27 +125,20 @@ class V2VProvider(V2VProviderBase):
             conn: 连接对象
         """
         try:
-            self.logger.bind(tag=TAG).info("📡 Started ElevenLabs receive loop")
             async for message in conn.elevenlabs_ws:
                 if not conn.v2v_active:
-                    self.logger.bind(tag=TAG).info("V2V no longer active, stopping receive loop")
                     break
                 
                 if isinstance(message, str):
-                    # Handle JSON messages (ping, events, metadata, audio, etc.)
                     await self._handle_json_message(conn, message)
                 elif isinstance(message, bytes):
-                    # ElevenLabs Agents uses JSON for everything, binary messages shouldn't happen
-                    self.logger.bind(tag=TAG).warning(f"⚠️ Received unexpected binary message ({len(message)} bytes)")
-                    # Try to decode as text/JSON
                     try:
                         text_message = message.decode('utf-8')
                         await self._handle_json_message(conn, text_message)
                     except:
-                        self.logger.bind(tag=TAG).error("Failed to decode binary message as JSON")
+                        self.logger.bind(tag=TAG).error("Failed to decode binary message")
                     
         except websockets.exceptions.ConnectionClosed:
-            self.logger.bind(tag=TAG).info("ElevenLabs WebSocket connection closed")
             conn.v2v_active = False
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"Error in ElevenLabs receive loop: {e}")
@@ -174,45 +157,30 @@ class V2VProvider(V2VProviderBase):
             msg_type = data.get("type")
             
             if msg_type == "conversation_initiation_metadata":
-                # Session started
                 conn.elevenlabs_session_id = data.get("conversation_initiation_metadata_event", {}).get("conversation_id")
-                self.logger.bind(tag=TAG).info(
-                    f"ElevenLabs session started: {conn.elevenlabs_session_id}"
-                )
                 
             elif msg_type == "user_transcript":
-                # User speech transcription - user finished speaking
                 transcript = data.get("user_transcription_event", {}).get("user_transcript", "")
-                self.logger.bind(tag=TAG).info(f"👤 User said: {transcript}")
+                self.logger.bind(tag=TAG).info(f"👤 User: {transcript}")
                 
-                # User finished speaking - prepare for agent response
                 conn.client_abort = False
                 conn.client_is_speaking = False
                 
-                # Reset audio state to allow new agent response
                 if hasattr(conn, 'elevenlabs_audio_started'):
                     conn.elevenlabs_audio_started = False
                                     
             elif msg_type == "agent_response" or msg_type == "agent_response_transcript":
-                # Agent response - agent finished speaking
-                transcript = data.get("agent_response_event", {}).get("agent_response", "")
-                self.logger.bind(tag=TAG).info(f"🤖 Agent said: {transcript}")
+                transcript = data.get("agent_response_event", {}).get("agent_response", "").strip()
+                self.logger.bind(tag=TAG).info(f"🤖 Agent: {transcript}")
                 
-                # ALWAYS reset state for next turn - ready to listen to user again
                 if hasattr(conn, 'elevenlabs_audio_started'):
                     conn.elevenlabs_audio_started = False
                 conn.client_is_speaking = False
                 conn.client_abort = False
                 
-                # Send TTS stop message to hardware
                 await send_tts_message(conn, "stop", None)
                                 
             elif msg_type == "interruption":
-                # ElevenLabs confirmed interruption - cleanup state
-                self.logger.bind(tag=TAG).info("⚠️ ElevenLabs confirmed interruption")
-                
-                # Agent audio should already be stopped by listen handler
-                # Just ensure state is clean
                 if hasattr(conn, 'elevenlabs_audio_started'):
                     conn.elevenlabs_audio_started = False
                     
@@ -220,8 +188,6 @@ class V2VProvider(V2VProviderBase):
                     conn.elevenlabs_audio_buffer.clear()
                     
                 conn.client_is_speaking = False
-                
-                self.logger.bind(tag=TAG).info("✅ Interruption confirmed - ready for user input")
                 
             elif msg_type == "audio":
                 # Agent audio response (from SDK: audio_event.audio_base_64)
@@ -241,10 +207,9 @@ class V2VProvider(V2VProviderBase):
                     "event_id": event_id
                 }
                 await conn.elevenlabs_ws.send(json.dumps(pong_message))
-                self.logger.bind(tag=TAG).debug(f"Sent pong with event_id={event_id}")
                 
             else:
-                self.logger.bind(tag=TAG).debug(f"Received message type: {msg_type}")
+                pass
                 
         except json.JSONDecodeError as e:
             self.logger.bind(tag=TAG).error(f"Failed to parse ElevenLabs message: {e}")
@@ -263,61 +228,41 @@ class V2VProvider(V2VProviderBase):
             # ElevenLabs sends PCM audio, need to encode to Opus for hardware
             if not hasattr(conn, 'elevenlabs_opus_encoder'):
                 import opuslib_next
-                # Create Opus encoder for hardware: 16kHz, mono, VoIP application
                 conn.elevenlabs_opus_encoder = opuslib_next.Encoder(
                     16000, 1, opuslib_next.APPLICATION_VOIP
                 )
             
-            # Encode PCM to Opus (960 samples = 60ms at 16kHz, matching hardware)
-            # ElevenLabs typically sends audio in chunks, may need buffering
             if not hasattr(conn, 'elevenlabs_audio_buffer'):
                 conn.elevenlabs_audio_buffer = bytearray()
             
-            # Send TTS start message on first audio chunk
             if not hasattr(conn, 'elevenlabs_audio_started') or not conn.elevenlabs_audio_started:
                 conn.elevenlabs_audio_started = True
                 
-                # Reset user input counter so next user audio triggers activity detection
                 if hasattr(conn, 'elevenlabs_input_count'):
                     delattr(conn, 'elevenlabs_input_count')
                 
-                # Clear abort flag to allow audio playback
                 conn.client_abort = False
                 
-                # Reset flow control for clean audio streaming
                 if hasattr(conn, 'audio_flow_control'):
                     delattr(conn, 'audio_flow_control')
                 
-                # Mark that system is speaking
                 conn.client_is_speaking = True
                 
                 await send_tts_message(conn, "start", None)
-                self.logger.bind(tag=TAG).info("📢 TTS start sent to hardware - agent speaking now")
             
             conn.elevenlabs_audio_buffer.extend(audio_data)
             
-            # Process complete frames (960 samples * 2 bytes per sample = 1920 bytes)
             frame_size = 1920
-            frames_sent = 0
             while len(conn.elevenlabs_audio_buffer) >= frame_size:
-                # Double-check abort flag before each frame (user might interrupt)
                 if conn.client_abort:
-                    self.logger.bind(tag=TAG).info("⏹️ Audio playback aborted by user")
                     conn.elevenlabs_audio_buffer.clear()
                     break
                 
                 pcm_frame = bytes(conn.elevenlabs_audio_buffer[:frame_size])
                 conn.elevenlabs_audio_buffer = conn.elevenlabs_audio_buffer[frame_size:]
                 
-                # Encode to Opus (60ms frame)
                 opus_data = conn.elevenlabs_opus_encoder.encode(pcm_frame, 960)
-                
-                # Send to hardware using proper sendAudio function (with flow control)
                 await sendAudio(conn, opus_data, frame_duration=60)
-                frames_sent += 1
-                    
-            if frames_sent > 0:
-                self.logger.bind(tag=TAG).debug(f"🔈 Sent {frames_sent} Opus frames to hardware")
                     
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"Error handling audio output: {e}")
@@ -333,12 +278,10 @@ class V2VProvider(V2VProviderBase):
             return
             
         try:
-            # Send user_activity signal to trigger turn-taking
             user_activity_msg = {
                 "type": "user_activity"
             }
             await conn.elevenlabs_ws.send(json.dumps(user_activity_msg))
-            self.logger.bind(tag=TAG).info("🗣️ Sent user_activity signal to ElevenLabs (user wants to speak)")
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"Failed to send user_activity: {e}")
 
@@ -360,15 +303,10 @@ class V2VProvider(V2VProviderBase):
             return
 
         try:
-            # Only log every 10th chunk to avoid spam (but always log first chunk)
             if not hasattr(conn, 'elevenlabs_input_count'):
                 conn.elevenlabs_input_count = 0
-                self.logger.bind(tag=TAG).info(f"🎤 👤 USER AUDIO INPUT STARTED - sending to ElevenLabs")
                 
-                # Automatically notify ElevenLabs of user activity on first audio chunk
-                # This triggers turn-taking without requiring hardware to send explicit "listen" message
                 if conn.client_is_speaking:
-                    self.logger.bind(tag=TAG).info("🚨 User speaking while agent is speaking - triggering interruption")
                     conn.client_abort = True
                     if hasattr(conn, 'elevenlabs_audio_buffer'):
                         conn.elevenlabs_audio_buffer.clear()
@@ -377,41 +315,29 @@ class V2VProvider(V2VProviderBase):
                     await self.notify_user_speaking(conn)
                     conn.client_abort = False
                 else:
-                    self.logger.bind(tag=TAG).info("🎤 User started speaking (agent idle)")
                     await self.notify_user_speaking(conn)
             
             conn.elevenlabs_input_count += 1
-            if conn.elevenlabs_input_count % 10 == 0:
-                self.logger.bind(tag=TAG).debug(f"🎤 User audio: {conn.elevenlabs_input_count} chunks sent")
             
-            # Decode Opus to PCM for ElevenLabs
             if not hasattr(conn, 'elevenlabs_opus_decoder'):
                 import opuslib_next
-                self.logger.bind(tag=TAG).info("Creating Opus decoder for 16kHz mono audio")
                 conn.elevenlabs_opus_decoder = opuslib_next.Decoder(16000, 1)
             
             try:
-                # Decode Opus to PCM (Hardware sends 60ms frames at 16kHz = 960 samples)
                 pcm_data = conn.elevenlabs_opus_decoder.decode(audio_data, frame_size=960)
                 
-                # Send PCM audio to ElevenLabs
                 if conn.elevenlabs_ws:
                     import base64
                     audio_b64 = base64.b64encode(pcm_data).decode('utf-8')
                     
-                    # Send as JSON (ElevenLabs SDK format)
                     audio_message = {
                         "user_audio_chunk": audio_b64
                     }
                     
                     await conn.elevenlabs_ws.send(json.dumps(audio_message))
-                else:
-                    self.logger.bind(tag=TAG).error("ElevenLabs WebSocket is None!")
                 
             except Exception as decode_error:
-                self.logger.bind(tag=TAG).error(f"❌ Audio decode error: {decode_error}")
-                import traceback
-                self.logger.bind(tag=TAG).error(f"Traceback: {traceback.format_exc()}")
+                self.logger.bind(tag=TAG).error(f"Audio decode error: {decode_error}")
             
         except Exception as e:
             self.logger.bind(tag=TAG).error(
@@ -436,12 +362,9 @@ class V2VProvider(V2VProviderBase):
                 except asyncio.CancelledError:
                     pass
             
-            # Close WebSocket connection
             if conn.elevenlabs_ws:
                 await conn.elevenlabs_ws.close()
                 conn.elevenlabs_ws = None
-
-            self.logger.bind(tag=TAG).info("ElevenLabs conversation stopped")
 
         except Exception as e:
             self.logger.bind(tag=TAG).error(
@@ -457,7 +380,6 @@ class V2VProvider(V2VProviderBase):
         """
         await self.stop_conversation(conn)
         
-        # Clean up connection attributes
         attrs_to_clean = [
             'elevenlabs_ws', 'elevenlabs_session_id', 'elevenlabs_receive_task',
             'elevenlabs_opus_decoder', 'elevenlabs_opus_encoder', 
@@ -467,6 +389,4 @@ class V2VProvider(V2VProviderBase):
         for attr in attrs_to_clean:
             if hasattr(conn, attr):
                 delattr(conn, attr)
-
-        self.logger.bind(tag=TAG).info("ElevenLabs V2V cleanup completed")
 

@@ -21,9 +21,6 @@ class TextMessageProcessor:
             if isinstance(msg_json, dict):
                 message_type = msg_json.get("type")
 
-                # 记录日志
-                conn.logger.bind(tag=TAG).info(f"收到{message_type}消息：{message}")
-
                 # 获取并执行处理器
                 handler = self.registry.get_handler(message_type)
                 if handler:

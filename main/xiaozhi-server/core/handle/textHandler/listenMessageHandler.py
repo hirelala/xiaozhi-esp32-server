@@ -28,9 +28,7 @@ class ListenTextMessageHandler(TextMessageHandler):
             conn.client_voice_stop = False
             
             # V2V mode: IMMEDIATELY interrupt agent and prioritize user input
-            if getattr(conn, 'enable_voice2voice', False) and hasattr(conn, 'v2v') and conn.v2v:
-                conn.logger.bind(tag=TAG).info("👤 🚨 USER INPUT DETECTED - HIGHEST PRIORITY!")
-                
+            if getattr(conn, 'enable_voice2voice', False) and hasattr(conn, 'v2v') and conn.v2v:                
                 # STEP 1: Stop agent audio immediately
                 conn.client_abort = True
                 conn.client_is_speaking = False
@@ -54,8 +52,7 @@ class ListenTextMessageHandler(TextMessageHandler):
                 # STEP 6: Reset input counter for clean logging
                 if hasattr(conn, 'elevenlabs_input_count'):
                     conn.elevenlabs_input_count = 0
-                
-                conn.logger.bind(tag=TAG).info("✅ Agent interrupted, ready for user input")
+
         elif msg_json["state"] == "stop":
             conn.client_have_voice = True
             conn.client_voice_stop = True
