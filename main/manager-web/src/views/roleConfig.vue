@@ -129,6 +129,26 @@
                           :value="item.value" />
                       </el-select>
                     </el-form-item>
+                    <el-form-item :label="$t('roleConfig.voice2voiceMode')">
+                      <div class="voice2voice-wrapper">
+                        <el-switch
+                          v-model="form.enableVoice2voice"
+                          :active-value="1"
+                          :inactive-value="0"
+                          class="custom-switch"
+                          @change="handleVoice2VoiceChange"
+                        />
+                        <span class="voice2voice-desc">{{ $t('roleConfig.voice2voiceDesc') }}</span>
+                      </div>
+                    </el-form-item>
+                    <el-form-item v-if="form.enableVoice2voice === 1" :label="$t('roleConfig.v2v')">
+                      <el-select v-model="form.model.v2vModelId" filterable
+                        :placeholder="$t('roleConfig.pleaseSelect')" class="form-select"
+                        @change="handleModelChange('V2V', $event)">
+                        <el-option v-for="(item, optionIndex) in modelOptions['V2V']"
+                          :key="`option-v2v-${optionIndex}`" :label="item.label" :value="item.value" />
+                      </el-select>
+                    </el-form-item>
                   </div>
                 </div>
               </div>
@@ -163,6 +183,7 @@ export default {
         langCode: "",
         language: "",
         sort: "",
+        enableVoice2voice: 0,
         model: {
           ttsModelId: "",
           vadModelId: "",
@@ -171,6 +192,7 @@ export default {
           vllmModelId: "",
           memModelId: "",
           intentModelId: "",
+          v2vModelId: "",
         }
       },
       models: [
@@ -181,6 +203,7 @@ export default {
         { label: this.$t('roleConfig.intent'), key: 'intentModelId', type: 'Intent' },
         { label: this.$t('roleConfig.memory'), key: 'memModelId', type: 'Memory' },
         { label: this.$t('roleConfig.tts'), key: 'ttsModelId', type: 'TTS' }
+        // V2V is handled separately with toggle, not in the regular models loop
       ],
       llmModeTypeMap: new Map(),
       modelOptions: {},
@@ -214,6 +237,8 @@ export default {
         chatHistoryConf: this.form.chatHistoryConf,
         memModelId: this.form.model.memModelId,
         intentModelId: this.form.model.intentModelId,
+        enableVoice2voice: this.form.enableVoice2voice,
+        v2vModelId: this.form.model.v2vModelId,
         systemPrompt: this.form.systemPrompt,
         summaryMemory: this.form.summaryMemory,
         langCode: this.form.langCode,
@@ -232,6 +257,8 @@ export default {
             message: i18n.t('roleConfig.saveSuccess'),
             showClose: true
           });
+          // Reload the agent config to reflect saved values in UI
+          this.fetchAgentConfig(this.$route.query.agentId);
         } else {
           this.$message.error({
             message: data.msg || i18n.t('roleConfig.saveFailed'),
@@ -256,6 +283,7 @@ export default {
           langCode: "",
           language: "",
           sort: "",
+          enableVoice2voice: 0,
           model: {
             ttsModelId: "",
             vadModelId: "",
@@ -264,6 +292,7 @@ export default {
             vllmModelId: "",
             memModelId: "",
             intentModelId: "",
+            v2vModelId: "",
           }
         }
         this.currentFunctions = [];
@@ -273,6 +302,32 @@ export default {
         })
       }).catch(() => {
       });
+    },
+    handleVoice2VoiceChange(value) {
+      // When Voice2Voice is enabled, fetch V2V model options if not already loaded
+      console.log('handleVoice2VoiceChange called with value:', value);
+      if (value === 1) {
+        if (!this.modelOptions['V2V'] || this.modelOptions['V2V'].length === 0) {
+          console.log('Fetching V2V model options...');
+          // Fetch only V2V model options
+          Api.model.getModelNames('V2V', '', ({ data }) => {
+            if (data.code === 0) {
+              const options = data.data.map(item => ({
+                value: item.id,
+                label: item.modelName,
+                isHidden: false
+              }));
+              console.log('V2V options loaded:', options);
+              this.$set(this.modelOptions, 'V2V', options);
+              console.log('modelOptions.V2V after set:', this.modelOptions['V2V']);
+            } else {
+              this.$message.error(data.msg || i18n.t('roleConfig.fetchModelsFailed'));
+            }
+          });
+        } else {
+          console.log('V2V options already loaded:', this.modelOptions['V2V']);
+        }
+      }
     },
     fetchTemplates() {
       Api.agent.getAgentTemplate(({ data }) => {
@@ -311,6 +366,7 @@ export default {
         systemPrompt: templateData.systemPrompt || this.form.systemPrompt,
         summaryMemory: templateData.summaryMemory || this.form.summaryMemory,
         langCode: templateData.langCode || this.form.langCode,
+        enableVoice2voice: templateData.enableVoice2voice || this.form.enableVoice2voice,
         model: {
           ttsModelId: templateData.ttsModelId || this.form.model.ttsModelId,
           vadModelId: templateData.vadModelId || this.form.model.vadModelId,
@@ -318,26 +374,53 @@ export default {
           llmModelId: templateData.llmModelId || this.form.model.llmModelId,
           vllmModelId: templateData.vllmModelId || this.form.model.vllmModelId,
           memModelId: templateData.memModelId || this.form.model.memModelId,
-          intentModelId: templateData.intentModelId || this.form.model.intentModelId
+          intentModelId: templateData.intentModelId || this.form.model.intentModelId,
+          v2vModelId: templateData.v2vModelId || this.form.model.v2vModelId
         }
       };
     },
     fetchAgentConfig(agentId) {
       Api.agent.getDeviceConfig(agentId, ({ data }) => {
         if (data.code === 0) {
+          // Handle V2V fields with proper defaults
+          const enableV2V = data.data.enableVoice2voice ?? 0;
+          const v2vModel = data.data.v2vModelId ?? '';
+          
+          // Debug logging
+          console.log('=== V2V Config Debug ===');
+          console.log('API Response - enableVoice2voice:', data.data.enableVoice2voice);
+          console.log('API Response - v2vModelId:', data.data.v2vModelId);
+          console.log('Computed - enableV2V:', enableV2V);
+          console.log('Computed - v2vModel:', v2vModel);
+          console.log('========================');
+          
           this.form = {
             ...this.form,
             ...data.data,
+            enableVoice2voice: enableV2V,
             model: {
-              ttsModelId: data.data.ttsModelId,
-              vadModelId: data.data.vadModelId,
-              asrModelId: data.data.asrModelId,
-              llmModelId: data.data.llmModelId,
-              vllmModelId: data.data.vllmModelId,
-              memModelId: data.data.memModelId,
-              intentModelId: data.data.intentModelId
+              ttsModelId: data.data.ttsModelId || '',
+              vadModelId: data.data.vadModelId || '',
+              asrModelId: data.data.asrModelId || '',
+              llmModelId: data.data.llmModelId || '',
+              vllmModelId: data.data.vllmModelId || '',
+              memModelId: data.data.memModelId || '',
+              intentModelId: data.data.intentModelId || '',
+              v2vModelId: v2vModel
             }
           };
+          
+          // If V2V is enabled, ensure V2V model options are loaded
+          if (enableV2V === 1) {
+            console.log('V2V is enabled, calling handleVoice2VoiceChange');
+            this.handleVoice2VoiceChange(1);
+          }
+          
+          console.log('Form after setting:', {
+            enableVoice2voice: this.form.enableVoice2voice,
+            v2vModelId: this.form.model.v2vModelId
+          });
+          
           // 后端只给了最小映射：[{ id, agentId, pluginId }, ...]
           const savedMappings = data.data.functions || [];
 
@@ -872,5 +955,17 @@ export default {
   width: 32px;
   height: 32px;
   margin-left: 8px;
+}
+
+.voice2voice-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.voice2voice-desc {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

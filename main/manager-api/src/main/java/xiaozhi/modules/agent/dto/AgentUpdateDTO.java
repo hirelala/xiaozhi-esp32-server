@@ -47,6 +47,12 @@ public class AgentUpdateDTO implements Serializable {
     @Schema(description = "意图模型标识", example = "intent_model_02", nullable = true)
     private String intentModelId;
 
+    @Schema(description = "是否启用Voice2Voice模式(0否 1是)", example = "0", nullable = true)
+    private Integer enableVoice2voice;
+
+    @Schema(description = "Voice2Voice模型标识", example = "v2v_model_01", nullable = true)
+    private String v2vModelId;
+
     @Schema(description = "插件函数信息", nullable = true)
     private List<FunctionInfo> functions;
 

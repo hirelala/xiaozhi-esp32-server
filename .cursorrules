@@ -1,0 +1,6 @@
+
+
+# Rules
+- Don't generate any markdown document unless explicitly asked.
+- Don't generate any code comment unless explicitly asked.
+- Please follow the best code practice.

@@ -61,6 +61,7 @@ class ConnectionHandler:
         _memory,
         _intent,
         server=None,
+        _v2v=None,
     ):
         self.common_config = config
         self.config = copy.deepcopy(config)
@@ -108,6 +109,8 @@ class ConnectionHandler:
         self.llm = _llm
         self.memory = _memory
         self.intent = _intent
+        self.v2v = _v2v
+        self.enable_voice2voice = False  # V2V模式标志
 
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
@@ -199,6 +202,22 @@ class ConnectionHandler:
             self._initialize_private_config()
             # 异步初始化
             self.executor.submit(self._initialize_components)
+            
+            # 如果启用V2V模式，等待V2V初始化完成
+            if self.enable_voice2voice:
+                self.logger.bind(tag=TAG).info("⏳ V2V模式：等待V2V初始化完成...")
+                # 等待V2V组件被设置
+                max_wait = 30  # 最多等待30秒
+                for i in range(max_wait * 10):
+                    if hasattr(self, 'v2v') and self.v2v is not None:
+                        # V2V组件已设置，现在初始化连接
+                        await self._initialize_v2v()
+                        self.logger.bind(tag=TAG).info("✅ V2V初始化完成，开始接收消息")
+                        break
+                    await asyncio.sleep(0.1)
+                else:
+                    self.logger.bind(tag=TAG).error("⏱️ V2V初始化超时，降级到正常模式")
+                    self.enable_voice2voice = False
 
             try:
                 async for message in self.websocket:
@@ -265,6 +284,14 @@ class ConnectionHandler:
         if isinstance(message, str):
             await handleTextMessage(self, message)
         elif isinstance(message, bytes):
+            # 如果启用了V2V模式，直接发送到V2V处理
+            if self.enable_voice2voice and self.v2v:
+                try:
+                    await self.v2v.handle_audio_input(self, message)
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"V2V音频处理错误: {e}")
+                return
+
             if self.vad is None or self.asr is None:
                 return
 
@@ -485,6 +512,30 @@ class ConnectionHandler:
 
         return asr
 
+    async def _initialize_v2v(self):
+        """初始化Voice2Voice连接"""
+        if self.v2v is None or not self.enable_voice2voice:
+            self.logger.bind(tag=TAG).warning(f"Skipping V2V init: v2v={self.v2v is not None}, enable_v2v={self.enable_voice2voice}")
+            return
+        
+        try:
+            self.logger.bind(tag=TAG).info("🔄 Starting V2V initialization...")
+            success = await self.v2v.initialize(self)
+            if success:
+                self.logger.bind(tag=TAG).info("✅ V2V initialize() returned success")
+                # 启动V2V对话
+                self.logger.bind(tag=TAG).info("📞 Calling start_conversation()...")
+                await self.v2v.start_conversation(self)
+                self.logger.bind(tag=TAG).info(f"✅ start_conversation() completed. v2v_active={getattr(self, 'v2v_active', 'NOT SET')}")
+            else:
+                self.logger.bind(tag=TAG).error("Voice2Voice初始化失败，降级到正常模式")
+                self.enable_voice2voice = False
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Voice2Voice初始化失败: {e}")
+            import traceback
+            self.logger.bind(tag=TAG).error(f"Traceback: {traceback.format_exc()}")
+            self.enable_voice2voice = False
+
     def _initialize_voiceprint(self):
         """为当前连接初始化声纹识别"""
         try:
@@ -536,31 +587,45 @@ class ConnectionHandler:
             False,
         )
 
-        init_vad = check_vad_update(self.common_config, private_config)
-        init_asr = check_asr_update(self.common_config, private_config)
+        # 检查是否启用V2V模式
+        enable_v2v = private_config.get("enable_voice2voice", 0) == 1
+        self.logger.bind(tag=TAG).info(f"🔍 检查V2V模式: enable_voice2voice={private_config.get('enable_voice2voice', 0)}, enable_v2v={enable_v2v}")
 
-        if init_vad:
-            self.config["VAD"] = private_config["VAD"]
-            self.config["selected_module"]["VAD"] = private_config["selected_module"][
-                "VAD"
-            ]
-        if init_asr:
-            self.config["ASR"] = private_config["ASR"]
-            self.config["selected_module"]["ASR"] = private_config["selected_module"][
-                "ASR"
-            ]
-        if private_config.get("TTS", None) is not None:
-            init_tts = True
-            self.config["TTS"] = private_config["TTS"]
-            self.config["selected_module"]["TTS"] = private_config["selected_module"][
-                "TTS"
-            ]
-        if private_config.get("LLM", None) is not None:
-            init_llm = True
-            self.config["LLM"] = private_config["LLM"]
-            self.config["selected_module"]["LLM"] = private_config["selected_module"][
-                "LLM"
-            ]
+        # 如果启用V2V，不初始化VAD、ASR、LLM、TTS
+        if not enable_v2v:
+            init_vad = check_vad_update(self.common_config, private_config)
+            init_asr = check_asr_update(self.common_config, private_config)
+            self.logger.bind(tag=TAG).info(f"ℹ️ 常规模式: 初始化 VAD={init_vad}, ASR={init_asr}")
+
+            if init_vad:
+                self.config["VAD"] = private_config["VAD"]
+                self.config["selected_module"]["VAD"] = private_config["selected_module"][
+                    "VAD"
+                ]
+            if init_asr:
+                self.config["ASR"] = private_config["ASR"]
+                self.config["selected_module"]["ASR"] = private_config["selected_module"][
+                    "ASR"
+                ]
+            if private_config.get("TTS", None) is not None:
+                init_tts = True
+                self.config["TTS"] = private_config["TTS"]
+                self.config["selected_module"]["TTS"] = private_config["selected_module"][
+                    "TTS"
+                ]
+            if private_config.get("LLM", None) is not None:
+                init_llm = True
+                self.config["LLM"] = private_config["LLM"]
+                self.config["selected_module"]["LLM"] = private_config["selected_module"][
+                    "LLM"
+                ]
+        else:
+            # V2V模式下，将这些标志设为False，避免初始化传统组件
+            init_vad = False
+            init_asr = False
+            # init_llm 和 init_tts 保持为 False (line 558初始化)
+            self.logger.bind(tag=TAG).info("✅ V2V模式已启用，跳过VAD、ASR、LLM、TTS初始化")
+            self.logger.bind(tag=TAG).info(f"ℹ️ V2V模式: init_vad={init_vad}, init_asr={init_asr}, init_llm={init_llm}, init_tts={init_tts}")
         if private_config.get("VLLM", None) is not None:
             self.config["VLLM"] = private_config["VLLM"]
             self.config["selected_module"]["VLLM"] = private_config["selected_module"][
@@ -588,6 +653,30 @@ class ConnectionHandler:
                 ] = plugin_from_server.keys()
         if private_config.get("prompt", None) is not None:
             self.config["prompt"] = private_config["prompt"]
+        
+        # 处理V2V配置
+        enable_v2v_value = private_config.get("enable_voice2voice", 0)
+        v2v_model_id = private_config.get("v2v_model_id", None)
+        has_v2v_config = private_config.get("V2V", None) is not None
+        
+        self.logger.bind(tag=TAG).info(f"=== V2V配置检查 ===")
+        self.logger.bind(tag=TAG).info(f"enable_voice2voice: {enable_v2v_value}")
+        self.logger.bind(tag=TAG).info(f"v2v_model_id: {v2v_model_id}")
+        self.logger.bind(tag=TAG).info(f"V2V配置存在: {has_v2v_config}")
+        
+        if enable_v2v_value == 1:
+            self.enable_voice2voice = True
+            if private_config.get("V2V", None) is not None:
+                self.config["V2V"] = private_config["V2V"]
+                self.config["selected_module"]["V2V"] = private_config["selected_module"]["V2V"]
+                self.logger.bind(tag=TAG).info(f"✅ 启用Voice2Voice模式: {private_config['selected_module']['V2V']}")
+            else:
+                self.logger.bind(tag=TAG).warning("⚠️ enable_voice2voice=1 但V2V配置不存在，无法启用V2V")
+                self.enable_voice2voice = False
+        else:
+            self.enable_voice2voice = False
+            self.logger.bind(tag=TAG).info("ℹ️ Voice2Voice模式未启用")
+        
         # 获取声纹信息
         if private_config.get("voiceprint", None) is not None:
             self.config["voiceprint"] = private_config["voiceprint"]
@@ -597,8 +686,22 @@ class ConnectionHandler:
             self.max_output_size = int(private_config["device_max_output_size"])
         if private_config.get("chat_history_conf", None) is not None:
             self.chat_history_conf = int(private_config["chat_history_conf"])
-        if private_config.get("mcp_endpoint", None) is not None:
-            self.config["mcp_endpoint"] = private_config["mcp_endpoint"]
+        
+        if not enable_v2v:
+            if private_config.get("mcp_endpoint", None) is not None:
+                self.config["mcp_endpoint"] = private_config["mcp_endpoint"]
+        else:
+            self.logger.bind(tag=TAG).info("✅ V2V模式已启用，跳过MCP配置（v2v已内置MCP）")
+        
+        # 确定是否需要初始化V2V
+        init_v2v = self.enable_voice2voice and private_config.get("V2V", None) is not None
+        
+        self.logger.bind(tag=TAG).info(f"🔧 调用 initialize_modules:")
+        self.logger.bind(tag=TAG).info(f"  - init_vad={init_vad}, init_asr={init_asr}")
+        self.logger.bind(tag=TAG).info(f"  - init_llm={init_llm}, init_tts={init_tts}")
+        self.logger.bind(tag=TAG).info(f"  - init_memory={init_memory}, init_intent={init_intent}")
+        self.logger.bind(tag=TAG).info(f"  - init_v2v={init_v2v}")
+        
         try:
             modules = initialize_modules(
                 self.logger,
@@ -609,6 +712,7 @@ class ConnectionHandler:
                 init_tts,
                 init_memory,
                 init_intent,
+                init_v2v,
             )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"初始化组件失败: {e}")
@@ -625,6 +729,9 @@ class ConnectionHandler:
             self.intent = modules["intent"]
         if modules.get("memory", None) is not None:
             self.memory = modules["memory"]
+        if modules.get("v2v", None) is not None:
+            self.v2v = modules["v2v"]
+            # V2V连接将在主循环开始前初始化（见 handle() 方法）
 
     def _initialize_memory(self):
         if self.memory is None:
@@ -770,18 +877,6 @@ class ConnectionHandler:
             total_chars = sum(len(json.dumps(msg, ensure_ascii=False)) for msg in full_dialogue)
             self.logger.bind(tag=TAG).info(f"总字符数: {total_chars} (~{total_chars//4} tokens估算)")
             
-            # 打印完整对话内容
-            self.logger.bind(tag=TAG).info("完整对话内容 (Dialogue):")
-            self.logger.bind(tag=TAG).info(json.dumps(full_dialogue, indent=2, ensure_ascii=False))
-            
-            # 如果有functions，也打印出来
-            if self.intent_type == "function_call" and functions is not None:
-                functions_chars = len(json.dumps(functions, ensure_ascii=False))
-                self.logger.bind(tag=TAG).info(f"Functions字符数: {functions_chars} (~{functions_chars//4} tokens估算)")
-                self.logger.bind(tag=TAG).info("可用Functions:")
-                self.logger.bind(tag=TAG).info(json.dumps(functions, indent=2, ensure_ascii=False))
-            
-            self.logger.bind(tag=TAG).info("="*80)
 
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
