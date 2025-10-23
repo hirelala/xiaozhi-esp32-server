@@ -235,24 +235,33 @@ class V2VProvider(V2VProviderBase):
             if not hasattr(conn, 'elevenlabs_audio_buffer'):
                 conn.elevenlabs_audio_buffer = bytearray()
             
-            if not hasattr(conn, 'elevenlabs_audio_started') or not conn.elevenlabs_audio_started:
-                conn.elevenlabs_audio_started = True
-                
-                if hasattr(conn, 'elevenlabs_input_count'):
-                    delattr(conn, 'elevenlabs_input_count')
-                
-                conn.client_abort = False
-                
-                if hasattr(conn, 'audio_flow_control'):
-                    delattr(conn, 'audio_flow_control')
-                
-                conn.client_is_speaking = True
-                
-                await send_tts_message(conn, "start", None)
+            if not hasattr(conn, 'elevenlabs_audio_started'):
+                conn.elevenlabs_audio_started = False
             
             conn.elevenlabs_audio_buffer.extend(audio_data)
             
             frame_size = 1920
+            pre_buffer_size = frame_size * 2
+            
+            if not conn.elevenlabs_audio_started:
+                if len(conn.elevenlabs_audio_buffer) >= pre_buffer_size:
+                    conn.elevenlabs_audio_started = True
+                    
+                    if hasattr(conn, 'elevenlabs_input_count'):
+                        conn.elevenlabs_input_count = 0
+                        conn.elevenlabs_user_activity_sent = False
+                    
+                    conn.client_abort = False
+                    
+                    if hasattr(conn, 'audio_flow_control'):
+                        delattr(conn, 'audio_flow_control')
+                    
+                    conn.client_is_speaking = True
+                    
+                    await send_tts_message(conn, "start", None)
+                else:
+                    return
+            
             while len(conn.elevenlabs_audio_buffer) >= frame_size:
                 if conn.client_abort:
                     conn.elevenlabs_audio_buffer.clear()
@@ -305,19 +314,24 @@ class V2VProvider(V2VProviderBase):
         try:
             if not hasattr(conn, 'elevenlabs_input_count'):
                 conn.elevenlabs_input_count = 0
-                
+                conn.elevenlabs_user_activity_sent = False
+            
+            conn.elevenlabs_input_count += 1
+            
+            if not conn.elevenlabs_user_activity_sent and conn.elevenlabs_input_count >= 5:
                 if conn.client_is_speaking:
+                    self.logger.bind(tag=TAG).info("👤 User interrupting agent")
                     conn.client_abort = True
                     if hasattr(conn, 'elevenlabs_audio_buffer'):
                         conn.elevenlabs_audio_buffer.clear()
                     if hasattr(conn, 'elevenlabs_audio_started'):
                         conn.elevenlabs_audio_started = False
-                    await self.notify_user_speaking(conn)
+                
+                await self.notify_user_speaking(conn)
+                conn.elevenlabs_user_activity_sent = True
+                
+                if conn.client_is_speaking:
                     conn.client_abort = False
-                else:
-                    await self.notify_user_speaking(conn)
-            
-            conn.elevenlabs_input_count += 1
             
             if not hasattr(conn, 'elevenlabs_opus_decoder'):
                 import opuslib_next
