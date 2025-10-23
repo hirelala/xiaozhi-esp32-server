@@ -7,7 +7,10 @@ Documentation: https://elevenlabs.io/docs/agents-platform/overview
 import asyncio
 import json
 import websockets
+import base64
+import opuslib_next
 from typing import Dict, Any, Optional
+
 from .base import V2VProviderBase
 from core.handle.sendAudioHandle import sendAudio, send_tts_message
 
@@ -23,31 +26,22 @@ class V2VProvider(V2VProviderBase):
         self.agent_id = config.get("agent_id", "")
         
         # Optional configurations
-        self.signed_url = config.get("signed_url", None)  # For authenticated agents
-        self.audio_format = config.get("audio_format", "pcm_16000")  # PCM 16kHz default
+        self.signed_url = config.get("signed_url", None)
+        self.audio_format = config.get("audio_format", "pcm_16000")
         
         # Validate configuration
         if not self.api_key or not self.agent_id:
-            self.logger.bind(tag=TAG).warning(
+            self.logger.bind(tag=TAG).error(
                 "ElevenLabs V2V configuration incomplete. Please set api_key and agent_id"
             )
 
     async def initialize(self, conn) -> bool:
-        """
-        初始化ElevenLabs Agents连接
-
-        Args:
-            conn: 连接对象
-
-        Returns:
-            bool: 初始化是否成功
-        """
         try:
-            # Initialize connection attributes
             conn.elevenlabs_ws = None
             conn.elevenlabs_session_id = None
             conn.v2v_active = False
             conn.elevenlabs_receive_task = None
+            conn.elevenlabs_agent_speaking = False
 
             self.logger.bind(tag=TAG).info("ElevenLabs Agents V2V initialized successfully")
             return True
@@ -57,16 +51,10 @@ class V2VProvider(V2VProviderBase):
             return False
 
     async def start_conversation(self, conn) -> None:
-        """
-        开始ElevenLabs Agents对话会话
-
-        Args:
-            conn: 连接对象
-        """
         try:
             device_id = conn.headers.get("device-id", "unknown")
             
-            # Build WebSocket URL
+            # Build WebSocket UR
             if self.signed_url:
                 # Use pre-signed URL for authenticated agents
                 ws_url = self.signed_url
@@ -85,7 +73,7 @@ class V2VProvider(V2VProviderBase):
                 ping_interval=None,
                 close_timeout=10
             )
-            self.logger.bind(tag=TAG).info(f"✅ ElevenLabs WebSocket connected for device: {device_id}")
+            self.logger.bind(tag=TAG).info(f"✅ levenLabs WebSocket connected for device: {device_id}")
             
             # Send initial configuration
             # DON'T override prompt - agent config doesn't allow it
@@ -123,12 +111,6 @@ class V2VProvider(V2VProviderBase):
             conn.v2v_active = False
 
     async def _receive_audio_loop(self, conn):
-        """
-        接收来自ElevenLabs的音频和消息
-
-        Args:
-            conn: 连接对象
-        """
         try:
             async for message in conn.elevenlabs_ws:
                 if not conn.v2v_active:
@@ -153,13 +135,6 @@ class V2VProvider(V2VProviderBase):
             conn.v2v_active = False
 
     async def _handle_json_message(self, conn, message: str):
-        """
-        处理来自ElevenLabs的JSON消息
-
-        Args:
-            conn: 连接对象
-            message: JSON消息字符串
-        """
         if not conn.v2v_active:
             return
             
@@ -174,33 +149,38 @@ class V2VProvider(V2VProviderBase):
                 transcript = data.get("user_transcription_event", {}).get("user_transcript", "")
                 self.logger.bind(tag=TAG).info(f"👤 User: {transcript}")
                                     
-            elif msg_type == "agent_response" or msg_type == "agent_response_transcript":
+            elif msg_type == "agent_response":
                 transcript = data.get("agent_response_event", {}).get("agent_response", "").strip()
                 self.logger.bind(tag=TAG).info(f"🤖 Agent: {transcript}")
                 
                 conn.elevenlabs_audio_started = False
+                conn.elevenlabs_agent_speaking = False
                 conn.client_is_speaking = False
                 await send_tts_message(conn, "stop", None)
                                 
             elif msg_type == "interruption":
-                self.logger.bind(tag=TAG).info("⚡ User interrupted agent")
+                self.logger.bind(tag=TAG).info("⚡ User interrupted agent (ElevenLabs VAD)")
+                event_id = data.get("event_id", "")
                 
                 conn.client_abort = True
                 conn.elevenlabs_audio_started = False
+                conn.elevenlabs_agent_speaking = False
                 conn.client_is_speaking = False
                 
                 if hasattr(conn, 'elevenlabs_audio_buffer'):
                     conn.elevenlabs_audio_buffer.clear()
                 
-                await asyncio.sleep(0.05)
+                await send_tts_message(conn, "stop", None)
+                
+                await asyncio.sleep(0.1)
                 conn.client_abort = False
                 
             elif msg_type == "audio":
                 # Agent audio response (from SDK: audio_event.audio_base_64)
+                event_id = data.get("event_id", "")
                 audio_event = data.get("audio_event", {})
                 audio_b64 = audio_event.get("audio_base_64", "")
                 if audio_b64:
-                    import base64
                     pcm_data = base64.b64decode(audio_b64)
                     await self._handle_audio_output(conn, pcm_data)
                     
@@ -226,16 +206,8 @@ class V2VProvider(V2VProviderBase):
             self.logger.bind(tag=TAG).error(f"Error handling ElevenLabs message: {e}")
 
     async def _handle_audio_output(self, conn, audio_data: bytes):
-        """
-        处理来自ElevenLabs的音频输出并发送到硬件
-
-        Args:
-            conn: 连接对象
-            audio_data: PCM音频数据
-        """
         try:
             if not hasattr(conn, 'elevenlabs_opus_encoder'):
-                import opuslib_next
                 conn.elevenlabs_opus_encoder = opuslib_next.Encoder(
                     16000, 1, opuslib_next.APPLICATION_VOIP
                 )
@@ -249,6 +221,7 @@ class V2VProvider(V2VProviderBase):
             
             if not conn.elevenlabs_audio_started:
                 conn.elevenlabs_audio_started = True
+                conn.elevenlabs_agent_speaking = True
                 conn.client_is_speaking = True
                 await send_tts_message(conn, "start", None)
             
@@ -270,31 +243,19 @@ class V2VProvider(V2VProviderBase):
             self.logger.bind(tag=TAG).error(f"Error handling audio output: {e}")
 
     async def handle_audio_input(self, conn, audio_data: bytes) -> None:
-        """
-        处理输入音频并发送到ElevenLabs
-
-        Args:
-            conn: 连接对象
-            audio_data: 音频数据（Opus格式）
-        """
-        # Check if V2V is active
         v2v_active = getattr(conn, 'v2v_active', False)
         has_ws = hasattr(conn, 'elevenlabs_ws') and conn.elevenlabs_ws is not None
         
         if not v2v_active or not has_ws:
-            self.logger.bind(tag=TAG).warning(f"V2V not ready: v2v_active={v2v_active}, has_ws={has_ws}")
-            self.logger.bind(tag=TAG).warning(f"Checking conn attributes: v2v_active exists={hasattr(conn, 'v2v_active')}, elevenlabs_ws exists={hasattr(conn, 'elevenlabs_ws')}")
             return
 
         try:
             if not hasattr(conn, 'elevenlabs_opus_decoder'):
-                import opuslib_next
                 conn.elevenlabs_opus_decoder = opuslib_next.Decoder(16000, 1)
             
             pcm_data = conn.elevenlabs_opus_decoder.decode(audio_data, frame_size=960)
             
             if conn.elevenlabs_ws and conn.v2v_active:
-                import base64
                 audio_b64 = base64.b64encode(pcm_data).decode('utf-8')
                 
                 audio_message = {
@@ -309,12 +270,6 @@ class V2VProvider(V2VProviderBase):
             self.logger.bind(tag=TAG).error(f"Failed to handle audio input: {e}")
 
     async def stop_conversation(self, conn) -> None:
-        """
-        停止ElevenLabs对话
-
-        Args:
-            conn: 连接对象
-        """
         try:
             conn.v2v_active = False
             
@@ -336,18 +291,17 @@ class V2VProvider(V2VProviderBase):
             )
 
     async def cleanup(self, conn) -> None:
-        """
-        清理ElevenLabs资源
-
-        Args:
-            conn: 连接对象
-        """
         await self.stop_conversation(conn)
         
         attrs_to_clean = [
-            'elevenlabs_ws', 'elevenlabs_session_id', 'elevenlabs_receive_task',
-            'elevenlabs_opus_decoder', 'elevenlabs_opus_encoder', 
-            'elevenlabs_audio_buffer'
+            'elevenlabs_ws', 
+            'elevenlabs_session_id', 
+            'elevenlabs_receive_task',
+            'elevenlabs_opus_decoder', 
+            'elevenlabs_opus_encoder', 
+            'elevenlabs_audio_buffer', 
+            'elevenlabs_agent_speaking',
+            'elevenlabs_audio_started'
         ]
         
         for attr in attrs_to_clean:
