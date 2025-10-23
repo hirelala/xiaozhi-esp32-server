@@ -26,33 +26,6 @@ class ListenTextMessageHandler(TextMessageHandler):
         if msg_json["state"] == "start":
             conn.client_have_voice = True
             conn.client_voice_stop = False
-            
-            # V2V mode: IMMEDIATELY interrupt agent and prioritize user input
-            if getattr(conn, 'enable_voice2voice', False) and hasattr(conn, 'v2v') and conn.v2v:                
-                # STEP 1: Stop agent audio immediately
-                conn.client_abort = True
-                conn.client_is_speaking = False
-                
-                # STEP 2: Clear audio buffers to prevent old audio from playing
-                if hasattr(conn, 'elevenlabs_audio_buffer'):
-                    conn.elevenlabs_audio_buffer.clear()
-                if hasattr(conn, 'elevenlabs_audio_started'):
-                    conn.elevenlabs_audio_started = False
-                    
-                # STEP 3: Reset flow control for clean state
-                if hasattr(conn, 'audio_flow_control'):
-                    conn.audio_flow_control = None
-                
-                # STEP 4: Notify ElevenLabs that user wants to speak (triggers interruption)
-                await conn.v2v.notify_user_speaking(conn)
-                
-                # STEP 5: Clear abort flag to allow user audio input
-                conn.client_abort = False
-                
-                # STEP 6: Reset input counter for clean logging
-                if hasattr(conn, 'elevenlabs_input_count'):
-                    conn.elevenlabs_input_count = 0
-
         elif msg_json["state"] == "stop":
             conn.client_have_voice = True
             conn.client_voice_stop = True
