@@ -109,8 +109,9 @@ def enqueue_tts_report(conn, text, opus_data):
         # 使用连接对象的队列，传入文本和二进制数据而非文件路径
         if conn.chat_history_conf == 2:
             conn.report_queue.put((2, text, opus_data, int(time.time())))
+            audio_size = len(opus_data) if opus_data else 0
             conn.logger.bind(tag=TAG).debug(
-                f"TTS数据已加入上报队列: {conn.device_id}, 音频大小: {len(opus_data)} "
+                f"TTS数据已加入上报队列: {conn.device_id}, 音频大小: {audio_size} "
             )
         else:
             conn.report_queue.put((2, text, None, int(time.time())))
@@ -137,8 +138,9 @@ def enqueue_asr_report(conn, text, opus_data):
         # 使用连接对象的队列，传入文本和二进制数据而非文件路径
         if conn.chat_history_conf == 2:
             conn.report_queue.put((1, text, opus_data, int(time.time())))
+            audio_size = len(opus_data) if opus_data else 0
             conn.logger.bind(tag=TAG).debug(
-                f"ASR数据已加入上报队列: {conn.device_id}, 音频大小: {len(opus_data)} "
+                f"ASR数据已加入上报队列: {conn.device_id}, 音频大小: {audio_size} "
             )
         else:
             conn.report_queue.put((1, text, None, int(time.time())))

@@ -7,6 +7,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from config.logger import setup_logging
+from core.utils.dialogue import Message
 
 TAG = __name__
 logger = setup_logging()
@@ -90,5 +91,32 @@ class V2VProviderBase(ABC):
             bool: 是否启用V2V
         """
         return getattr(conn, 'enable_voice2voice', False)
+
+    def add_v2v_message(self, conn, role: str, content: str) -> None:
+        if not hasattr(conn, 'v2v_dialogue'):
+            conn.v2v_dialogue = []
+        
+        message = Message(role=role, content=content)
+        conn.v2v_dialogue.append(message)
+        self.logger.bind(tag=TAG).debug(f"Added V2V message - Role: {role}, Content: {content[:50]}...")
+
+    async def save_v2v_memory(self, conn) -> None:
+        if not hasattr(conn, 'v2v_dialogue') or not conn.v2v_dialogue:
+            self.logger.bind(tag=TAG).debug("No V2V dialogue to save")
+            return
+        
+        if len(conn.v2v_dialogue) < 2:
+            self.logger.bind(tag=TAG).debug("V2V dialogue too short to save")
+            return
+        
+        try:
+            memory = getattr(conn, '_memory', None)
+            if memory:
+                await memory.save_memory(conn.v2v_dialogue)
+                self.logger.bind(tag=TAG).info(f"✅ V2V memory saved - {len(conn.v2v_dialogue)} messages")
+            else:
+                self.logger.bind(tag=TAG).warning("Memory provider not available for V2V")
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Failed to save V2V memory: {e}")
 
 

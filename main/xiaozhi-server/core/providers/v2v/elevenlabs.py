@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 
 from .base import V2VProviderBase
 from core.handle.sendAudioHandle import sendAudio, send_tts_message
+from core.handle.reportHandle import enqueue_asr_report, enqueue_tts_report
 
 TAG = __name__
 
@@ -42,6 +43,9 @@ class V2VProvider(V2VProviderBase):
             conn.v2v_active = False
             conn.elevenlabs_receive_task = None
             conn.elevenlabs_agent_speaking = False
+            conn.v2v_dialogue = []
+            
+            conn._memory = getattr(conn, 'memory', None)
 
             self.logger.bind(tag=TAG).info("ElevenLabs Agents V2V initialized successfully")
             return True
@@ -148,10 +152,16 @@ class V2VProvider(V2VProviderBase):
             elif msg_type == "user_transcript":
                 transcript = data.get("user_transcription_event", {}).get("user_transcript", "")
                 self.logger.bind(tag=TAG).info(f"👤 User: {transcript}")
+                if transcript:
+                    self.add_v2v_message(conn, "user", transcript)
+                    enqueue_asr_report(conn, transcript, None)
                                     
             elif msg_type == "agent_response":
                 transcript = data.get("agent_response_event", {}).get("agent_response", "").strip()
                 self.logger.bind(tag=TAG).info(f"🤖 Agent: {transcript}")
+                if transcript:
+                    self.add_v2v_message(conn, "assistant", transcript)
+                    enqueue_tts_report(conn, transcript, None)
                 
                 conn.elevenlabs_audio_started = False
                 conn.elevenlabs_agent_speaking = False
@@ -293,6 +303,8 @@ class V2VProvider(V2VProviderBase):
     async def cleanup(self, conn) -> None:
         await self.stop_conversation(conn)
         
+        await self.save_v2v_memory(conn)
+        
         attrs_to_clean = [
             'elevenlabs_ws', 
             'elevenlabs_session_id', 
@@ -301,7 +313,9 @@ class V2VProvider(V2VProviderBase):
             'elevenlabs_opus_encoder', 
             'elevenlabs_audio_buffer', 
             'elevenlabs_agent_speaking',
-            'elevenlabs_audio_started'
+            'elevenlabs_audio_started',
+            'v2v_dialogue',
+            '_memory'
         ]
         
         for attr in attrs_to_clean:

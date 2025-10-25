@@ -423,42 +423,48 @@ class ConnectionHandler:
             )
             self.logger = create_connection_logger(self.selected_module_str)
 
-            """初始化组件"""
-            if self.config.get("prompt") is not None:
-                user_prompt = self.config["prompt"]
-                # 使用快速提示词进行初始化
-                prompt = self.prompt_manager.get_quick_prompt(user_prompt)
-                self.change_system_prompt(prompt)
-                self.logger.bind(tag=TAG).info(
-                    f"快速初始化组件: prompt成功 {prompt[:50]}..."
+            if not self.enable_voice2voice:
+                """初始化组件"""
+                if self.config.get("prompt") is not None:
+                    user_prompt = self.config["prompt"]
+                    # 使用快速提示词进行初始化
+                    prompt = self.prompt_manager.get_quick_prompt(user_prompt)
+                    self.change_system_prompt(prompt)
+                    self.logger.bind(tag=TAG).info(
+                        f"快速初始化组件: prompt成功 {prompt[:50]}..."
+                    )
+
+                """初始化本地组件"""
+                if self.vad is None:
+                    self.vad = self._vad
+                if self.asr is None:
+                    self.asr = self._initialize_asr()
+
+                # 初始化声纹识别
+                self._initialize_voiceprint()
+
+                # 打开语音识别通道
+                asyncio.run_coroutine_threadsafe(
+                    self.asr.open_audio_channels(self), self.loop
+                )
+                if self.tts is None:
+                    self.tts = self._initialize_tts()
+                # 打开语音合成通道
+                asyncio.run_coroutine_threadsafe(
+                    self.tts.open_audio_channels(self), self.loop
                 )
 
-            """初始化本地组件"""
-            if self.vad is None:
-                self.vad = self._vad
-            if self.asr is None:
-                self.asr = self._initialize_asr()
+            else:
+                self.logger.bind(tag=TAG).info("✅ V2V模式：跳过 VAD、ASR、TTS、Intent 初始化")
 
-            # 初始化声纹识别
-            self._initialize_voiceprint()
-
-            # 打开语音识别通道
-            asyncio.run_coroutine_threadsafe(
-                self.asr.open_audio_channels(self), self.loop
-            )
-            if self.tts is None:
-                self.tts = self._initialize_tts()
-            # 打开语音合成通道
-            asyncio.run_coroutine_threadsafe(
-                self.tts.open_audio_channels(self), self.loop
-            )
-
-            """加载记忆"""
-            self._initialize_memory()
             """加载意图识别"""
             self._initialize_intent()
-            """初始化上报线程"""
+
+            """初始化上报线程（V2V和常规模式都需要）"""
             self._init_report_threads()
+            """加载记忆（V2V和常规模式都需要）"""
+            self._initialize_memory()
+
             """更新系统提示词"""
             self._init_prompt_enhancement()
 
@@ -613,19 +619,18 @@ class ConnectionHandler:
                 self.config["selected_module"]["TTS"] = private_config["selected_module"][
                     "TTS"
                 ]
-            if private_config.get("LLM", None) is not None:
-                init_llm = True
-                self.config["LLM"] = private_config["LLM"]
-                self.config["selected_module"]["LLM"] = private_config["selected_module"][
-                    "LLM"
-                ]
         else:
-            # V2V模式下，将这些标志设为False，避免初始化传统组件
             init_vad = False
             init_asr = False
-            # init_llm 和 init_tts 保持为 False (line 558初始化)
-            self.logger.bind(tag=TAG).info("✅ V2V模式已启用，跳过VAD、ASR、LLM、TTS初始化")
-            self.logger.bind(tag=TAG).info(f"ℹ️ V2V模式: init_vad={init_vad}, init_asr={init_asr}, init_llm={init_llm}, init_tts={init_tts}")
+            self.logger.bind(tag=TAG).info("✅ V2V模式已启用，跳过VAD、ASR、TTS初始化")
+        
+        if private_config.get("LLM", None) is not None:
+            init_llm = True
+            self.config["LLM"] = private_config["LLM"]
+            self.config["selected_module"]["LLM"] = private_config["selected_module"][
+                "LLM"
+            ]
+
         if private_config.get("VLLM", None) is not None:
             self.config["VLLM"] = private_config["VLLM"]
             self.config["selected_module"]["VLLM"] = private_config["selected_module"][
@@ -1137,6 +1142,16 @@ class ConnectionHandler:
                     pass
                 self.timeout_task = None
 
+            # 清理V2V资源
+            if self.enable_voice2voice and self.v2v:
+                try:
+                    await self.v2v.cleanup(self)
+                    self.logger.bind(tag=TAG).info("V2V资源已清理")
+                except Exception as v2v_error:
+                    self.logger.bind(tag=TAG).error(
+                        f"清理V2V资源时出错: {v2v_error}"
+                    )
+
             # 清理工具处理器资源
             if hasattr(self, "func_handler") and self.func_handler:
                 try:
@@ -1212,6 +1227,9 @@ class ConnectionHandler:
 
     def clear_queues(self):
         """清空所有任务队列"""
+        if self.enable_voice2voice:
+            return
+            
         if self.tts:
             self.logger.bind(tag=TAG).debug(
                 f"开始清理: TTS队列大小={self.tts.tts_text_queue.qsize()}, 音频队列大小={self.tts.tts_audio_queue.qsize()}"
