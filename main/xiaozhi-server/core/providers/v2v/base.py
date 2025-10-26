@@ -92,6 +92,40 @@ class V2VProviderBase(ABC):
         """
         return getattr(conn, 'enable_voice2voice', False)
 
+    def init_audio_buffers(self, conn) -> None:
+        if not hasattr(conn, 'v2v_user_audio_buffer'):
+            conn.v2v_user_audio_buffer = []
+        if not hasattr(conn, 'v2v_agent_audio_buffer'):
+            conn.v2v_agent_audio_buffer = []
+
+    def buffer_user_audio(self, conn, audio_data: bytes) -> None:
+        if not hasattr(conn, 'v2v_user_audio_buffer'):
+            conn.v2v_user_audio_buffer = []
+        conn.v2v_user_audio_buffer.append(audio_data)
+
+    def buffer_agent_audio(self, conn, audio_data: bytes) -> None:
+        if not hasattr(conn, 'v2v_agent_audio_buffer'):
+            conn.v2v_agent_audio_buffer = []
+        conn.v2v_agent_audio_buffer.append(audio_data)
+
+    def get_user_audio(self, conn) -> Optional[list]:
+        if hasattr(conn, 'v2v_user_audio_buffer') and conn.v2v_user_audio_buffer:
+            return conn.v2v_user_audio_buffer.copy()
+        return None
+
+    def get_agent_audio(self, conn) -> Optional[list]:
+        if hasattr(conn, 'v2v_agent_audio_buffer') and conn.v2v_agent_audio_buffer:
+            return conn.v2v_agent_audio_buffer.copy()
+        return None
+
+    def clear_user_audio_buffer(self, conn) -> None:
+        if hasattr(conn, 'v2v_user_audio_buffer'):
+            conn.v2v_user_audio_buffer.clear()
+
+    def clear_agent_audio_buffer(self, conn) -> None:
+        if hasattr(conn, 'v2v_agent_audio_buffer'):
+            conn.v2v_agent_audio_buffer.clear()
+
     def add_v2v_message(self, conn, role: str, content: str) -> None:
         if not hasattr(conn, 'v2v_dialogue'):
             conn.v2v_dialogue = []

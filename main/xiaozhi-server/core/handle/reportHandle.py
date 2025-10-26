@@ -51,7 +51,7 @@ def opus_to_wav(conn, opus_data):
 
     Args:
         output_dir: 输出目录（保留参数以保持接口兼容）
-        opus_data: opus音频数据
+        opus_data: opus音频数据（list of bytes packets）
 
     Returns:
         bytes: WAV格式的音频数据
@@ -61,7 +61,7 @@ def opus_to_wav(conn, opus_data):
 
     for opus_packet in opus_data:
         try:
-            pcm_frame = decoder.decode(opus_packet, 960)  # 960 samples = 60ms
+            pcm_frame = decoder.decode(opus_packet, 960)
             pcm_data.append(pcm_frame)
         except opuslib_next.OpusError as e:
             conn.logger.bind(tag=TAG).error(f"Opus解码错误: {e}", exc_info=True)

@@ -45,6 +45,8 @@ class V2VProvider(V2VProviderBase):
             conn.elevenlabs_agent_speaking = False
             conn.v2v_dialogue = []
             
+            self.init_audio_buffers(conn)
+            
             conn._memory = getattr(conn, 'memory', None)
 
             self.logger.bind(tag=TAG).info("ElevenLabs Agents V2V initialized successfully")
@@ -154,14 +156,18 @@ class V2VProvider(V2VProviderBase):
                 self.logger.bind(tag=TAG).info(f"👤 User: {transcript}")
                 if transcript:
                     self.add_v2v_message(conn, "user", transcript)
-                    enqueue_asr_report(conn, transcript, None)
+                    user_audio = self.get_user_audio(conn)
+                    enqueue_asr_report(conn, transcript, user_audio)
+                    self.clear_user_audio_buffer(conn)
                                     
             elif msg_type == "agent_response":
                 transcript = data.get("agent_response_event", {}).get("agent_response", "").strip()
                 self.logger.bind(tag=TAG).info(f"🤖 Agent: {transcript}")
                 if transcript:
                     self.add_v2v_message(conn, "assistant", transcript)
-                    enqueue_tts_report(conn, transcript, None)
+                    agent_audio = self.get_agent_audio(conn)
+                    enqueue_tts_report(conn, transcript, agent_audio)
+                    self.clear_agent_audio_buffer(conn)
                 
                 conn.elevenlabs_audio_started = False
                 conn.elevenlabs_agent_speaking = False
@@ -241,12 +247,14 @@ class V2VProvider(V2VProviderBase):
             while len(conn.elevenlabs_audio_buffer) >= frame_size:
                 if conn.client_abort:
                     conn.elevenlabs_audio_buffer.clear()
+                    self.clear_agent_audio_buffer(conn)
                     break
                 
                 pcm_frame = bytes(conn.elevenlabs_audio_buffer[:frame_size])
                 conn.elevenlabs_audio_buffer = conn.elevenlabs_audio_buffer[frame_size:]
                 
                 opus_data = conn.elevenlabs_opus_encoder.encode(pcm_frame, 960)
+                self.buffer_agent_audio(conn, opus_data)
                 await sendAudio(conn, opus_data, frame_duration=60)
                     
         except Exception as e:
@@ -260,6 +268,8 @@ class V2VProvider(V2VProviderBase):
             return
 
         try:
+            self.buffer_user_audio(conn, audio_data)
+            
             if not hasattr(conn, 'elevenlabs_opus_decoder'):
                 conn.elevenlabs_opus_decoder = opuslib_next.Decoder(16000, 1)
             
