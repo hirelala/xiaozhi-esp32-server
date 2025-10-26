@@ -1,6 +1,6 @@
 
 
-# Rules
-- Don't generate any markdown document unless explicitly asked.
-- Don't generate any code comment unless explicitly asked.
+# Key Rules
+- DO NOT generate any MARKDOWN documents unless you are explicitly asked.
+- DO NOT generate any code comment unless you are explicitly asked.
 - Please follow the best code practice.

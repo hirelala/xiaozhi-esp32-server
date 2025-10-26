@@ -186,9 +186,12 @@ class V2VProvider(V2VProviderBase):
                 if hasattr(conn, 'elevenlabs_audio_buffer'):
                     conn.elevenlabs_audio_buffer.clear()
                 
+                if hasattr(conn, 'v2v_agent_audio_buffer'):
+                    conn.v2v_agent_audio_buffer.clear()
+                
                 await send_tts_message(conn, "stop", None)
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
                 conn.client_abort = False
                 
             elif msg_type == "audio":

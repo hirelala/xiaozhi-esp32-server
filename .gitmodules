@@ -1,0 +1,3 @@
+[submodule "main/xiaozhi-hardware"]
+	path = main/xiaozhi-hardware
+	url = git@github.com:hirelala/xiaozhi-esp32.git
