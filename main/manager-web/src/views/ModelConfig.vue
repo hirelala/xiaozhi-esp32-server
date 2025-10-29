@@ -52,6 +52,9 @@
           <el-menu-item index="memory">
             <span class="menu-text">{{ $t("modelConfig.memory") }}</span>
           </el-menu-item>
+          <el-menu-item index="v2v">
+            <span class="menu-text">{{ $t("modelConfig.v2v") }}</span>
+          </el-menu-item>
         </el-menu>
 
         <!-- 右侧内容 -->

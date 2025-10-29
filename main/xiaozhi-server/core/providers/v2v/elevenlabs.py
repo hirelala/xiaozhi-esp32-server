@@ -1,0 +1,334 @@
+"""
+ElevenLabs Voice2Voice Provider
+Implements real-time voice-to-voice conversation using ElevenLabs Agents Platform
+Documentation: https://elevenlabs.io/docs/agents-platform/overview
+"""
+
+import asyncio
+import json
+import websockets
+import base64
+import opuslib_next
+from typing import Dict, Any, Optional
+
+from .base import V2VProviderBase
+from core.handle.sendAudioHandle import sendAudio, send_tts_message
+from core.handle.reportHandle import enqueue_asr_report, enqueue_tts_report
+
+TAG = __name__
+
+
+class V2VProvider(V2VProviderBase):
+    """ElevenLabs Agents Platform Voice2Voice提供者"""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.api_key = config.get("api_key", "")
+        self.agent_id = config.get("agent_id", "")
+        
+        # Optional configurations
+        self.signed_url = config.get("signed_url", None)
+        self.audio_format = config.get("audio_format", "pcm_16000")
+        
+        # Validate configuration
+        if not self.api_key or not self.agent_id:
+            self.logger.bind(tag=TAG).error(
+                "ElevenLabs V2V configuration incomplete. Please set api_key and agent_id"
+            )
+
+    async def initialize(self, conn) -> bool:
+        try:
+            conn.elevenlabs_ws = None
+            conn.elevenlabs_session_id = None
+            conn.v2v_active = False
+            conn.elevenlabs_receive_task = None
+            conn.elevenlabs_agent_speaking = False
+            conn.v2v_dialogue = []
+            
+            self.init_audio_buffers(conn)
+            
+            conn._memory = getattr(conn, 'memory', None)
+
+            self.logger.bind(tag=TAG).info("ElevenLabs Agents V2V initialized successfully")
+            return True
+
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Failed to initialize ElevenLabs Agents V2V: {e}")
+            return False
+
+    async def start_conversation(self, conn) -> None:
+        try:
+            device_id = conn.headers.get("device-id", "unknown")
+            
+            # Build WebSocket UR
+            if self.signed_url:
+                # Use pre-signed URL for authenticated agents
+                ws_url = self.signed_url
+            else:
+                # Use public agent URL
+                ws_url = f"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={self.agent_id}"
+            
+            # Add API key as query parameter if not using signed URL
+            if not self.signed_url:
+                ws_url += f"&api_key={self.api_key}"
+            
+            # Connect to ElevenLabs WebSocket
+            # Disable built-in ping/pong - ElevenLabs uses application-level ping/pong
+            conn.elevenlabs_ws = await websockets.connect(
+                ws_url,
+                ping_interval=None,
+                close_timeout=10
+            )
+            self.logger.bind(tag=TAG).info(f"✅ levenLabs WebSocket connected for device: {device_id}")
+            
+            # Send initial configuration
+            # DON'T override prompt - agent config doesn't allow it
+            # Just specify audio format
+            init_message = {
+                "type": "conversation_initiation_client_data",
+                "conversation_config_override": {
+                    "audio": {
+                        "input": {
+                            "encoding": "pcm_16000",
+                            "sample_rate": 16000
+                        },
+                        "output": {
+                            "encoding": "pcm_16000",
+                            "sample_rate": 16000
+                        }
+                    }
+                }
+            }
+            
+            await conn.elevenlabs_ws.send(json.dumps(init_message))
+            
+            # Start receiving audio from ElevenLabs
+            conn.elevenlabs_receive_task = asyncio.create_task(
+                self._receive_audio_loop(conn)
+            )
+            
+            conn.v2v_active = True
+            self.logger.bind(tag=TAG).info("✅ ElevenLabs conversation started")
+
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(
+                f"Failed to start ElevenLabs conversation: {e}"
+            )
+            conn.v2v_active = False
+
+    async def _receive_audio_loop(self, conn):
+        try:
+            async for message in conn.elevenlabs_ws:
+                if not conn.v2v_active:
+                    break
+                
+                if isinstance(message, str):
+                    await self._handle_json_message(conn, message)
+                elif isinstance(message, bytes):
+                    try:
+                        text_message = message.decode('utf-8')
+                        await self._handle_json_message(conn, text_message)
+                    except:
+                        self.logger.bind(tag=TAG).error("Failed to decode binary message")
+                    
+        except websockets.exceptions.ConnectionClosed as e:
+            self.logger.bind(tag=TAG).info(f"ElevenLabs connection closed: {e}")
+            conn.v2v_active = False
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Error in ElevenLabs receive loop: {e}")
+            conn.v2v_active = False
+        finally:
+            conn.v2v_active = False
+
+    async def _handle_json_message(self, conn, message: str):
+        if not conn.v2v_active:
+            return
+            
+        try:
+            data = json.loads(message)
+            msg_type = data.get("type")
+            
+            if msg_type == "conversation_initiation_metadata":
+                conn.elevenlabs_session_id = data.get("conversation_initiation_metadata_event", {}).get("conversation_id")
+                
+            elif msg_type == "user_transcript":
+                transcript = data.get("user_transcription_event", {}).get("user_transcript", "")
+                self.logger.bind(tag=TAG).info(f"👤 User: {transcript}")
+                if transcript:
+                    self.add_v2v_message(conn, "user", transcript)
+                    user_audio = self.get_user_audio(conn)
+                    enqueue_asr_report(conn, transcript, user_audio)
+                    self.clear_user_audio_buffer(conn)
+                                    
+            elif msg_type == "agent_response":
+                transcript = data.get("agent_response_event", {}).get("agent_response", "").strip()
+                self.logger.bind(tag=TAG).info(f"🤖 Agent: {transcript}")
+                if transcript:
+                    self.add_v2v_message(conn, "assistant", transcript)
+                    agent_audio = self.get_agent_audio(conn)
+                    enqueue_tts_report(conn, transcript, agent_audio)
+                    self.clear_agent_audio_buffer(conn)
+                
+                conn.elevenlabs_audio_started = False
+                conn.elevenlabs_agent_speaking = False
+                conn.client_is_speaking = False
+                await send_tts_message(conn, "stop", None)
+                                
+            elif msg_type == "interruption":
+                self.logger.bind(tag=TAG).info("⚡ User interrupted agent (ElevenLabs VAD)")
+                event_id = data.get("event_id", "")
+                
+                conn.client_abort = True
+                conn.elevenlabs_audio_started = False
+                conn.elevenlabs_agent_speaking = False
+                conn.client_is_speaking = False
+                
+                if hasattr(conn, 'elevenlabs_audio_buffer'):
+                    conn.elevenlabs_audio_buffer.clear()
+                
+                await send_tts_message(conn, "stop", None)
+                
+                await asyncio.sleep(0.1)
+                conn.client_abort = False
+                
+            elif msg_type == "audio":
+                # Agent audio response (from SDK: audio_event.audio_base_64)
+                event_id = data.get("event_id", "")
+                audio_event = data.get("audio_event", {})
+                audio_b64 = audio_event.get("audio_base_64", "")
+                if audio_b64:
+                    pcm_data = base64.b64decode(audio_b64)
+                    await self._handle_audio_output(conn, pcm_data)
+                    
+            elif msg_type == "ping":
+                ping_event = data.get("ping_event", {})
+                event_id = ping_event.get("event_id")
+                if event_id:
+                    pong_message = {
+                        "type": "pong",
+                        "event_id": event_id
+                    }
+                    try:
+                        await conn.elevenlabs_ws.send(json.dumps(pong_message))
+                    except Exception as pong_error:
+                        self.logger.bind(tag=TAG).error(f"Failed to send pong: {pong_error}")
+                
+            else:
+                pass
+                
+        except json.JSONDecodeError as e:
+            self.logger.bind(tag=TAG).error(f"Failed to parse ElevenLabs message: {e}")
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Error handling ElevenLabs message: {e}")
+
+    async def _handle_audio_output(self, conn, audio_data: bytes):
+        try:
+            if not hasattr(conn, 'elevenlabs_opus_encoder'):
+                conn.elevenlabs_opus_encoder = opuslib_next.Encoder(
+                    16000, 1, opuslib_next.APPLICATION_VOIP
+                )
+            
+            if not hasattr(conn, 'elevenlabs_audio_buffer'):
+                conn.elevenlabs_audio_buffer = bytearray()
+            
+            if not hasattr(conn, 'elevenlabs_audio_started'):
+                conn.elevenlabs_audio_started = False
+                conn.client_is_speaking = False
+            
+            if not conn.elevenlabs_audio_started:
+                conn.elevenlabs_audio_started = True
+                conn.elevenlabs_agent_speaking = True
+                conn.client_is_speaking = True
+                await send_tts_message(conn, "start", None)
+            
+            conn.elevenlabs_audio_buffer.extend(audio_data)
+            
+            frame_size = 1920
+            while len(conn.elevenlabs_audio_buffer) >= frame_size:
+                if conn.client_abort:
+                    conn.elevenlabs_audio_buffer.clear()
+                    self.clear_agent_audio_buffer(conn)
+                    break
+                
+                pcm_frame = bytes(conn.elevenlabs_audio_buffer[:frame_size])
+                conn.elevenlabs_audio_buffer = conn.elevenlabs_audio_buffer[frame_size:]
+                
+                opus_data = conn.elevenlabs_opus_encoder.encode(pcm_frame, 960)
+                self.buffer_agent_audio(conn, opus_data)
+                await sendAudio(conn, opus_data, frame_duration=60)
+                    
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Error handling audio output: {e}")
+
+    async def handle_audio_input(self, conn, audio_data: bytes) -> None:
+        v2v_active = getattr(conn, 'v2v_active', False)
+        has_ws = hasattr(conn, 'elevenlabs_ws') and conn.elevenlabs_ws is not None
+        
+        if not v2v_active or not has_ws:
+            return
+
+        try:
+            self.buffer_user_audio(conn, audio_data)
+            
+            if not hasattr(conn, 'elevenlabs_opus_decoder'):
+                conn.elevenlabs_opus_decoder = opuslib_next.Decoder(16000, 1)
+            
+            pcm_data = conn.elevenlabs_opus_decoder.decode(audio_data, frame_size=960)
+            
+            if conn.elevenlabs_ws and conn.v2v_active:
+                audio_b64 = base64.b64encode(pcm_data).decode('utf-8')
+                
+                audio_message = {
+                    "user_audio_chunk": audio_b64
+                }
+                
+                await conn.elevenlabs_ws.send(json.dumps(audio_message))
+
+        except websockets.exceptions.ConnectionClosed:
+            conn.v2v_active = False
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"Failed to handle audio input: {e}")
+
+    async def stop_conversation(self, conn) -> None:
+        try:
+            conn.v2v_active = False
+            
+            # Stop receive task
+            if hasattr(conn, 'elevenlabs_receive_task') and conn.elevenlabs_receive_task:
+                conn.elevenlabs_receive_task.cancel()
+                try:
+                    await conn.elevenlabs_receive_task
+                except asyncio.CancelledError:
+                    pass
+            
+            if conn.elevenlabs_ws:
+                await conn.elevenlabs_ws.close()
+                conn.elevenlabs_ws = None
+
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(
+                f"Error stopping ElevenLabs conversation: {e}"
+            )
+
+    async def cleanup(self, conn) -> None:
+        await self.stop_conversation(conn)
+        
+        await self.save_v2v_memory(conn)
+        
+        attrs_to_clean = [
+            'elevenlabs_ws', 
+            'elevenlabs_session_id', 
+            'elevenlabs_receive_task',
+            'elevenlabs_opus_decoder', 
+            'elevenlabs_opus_encoder', 
+            'elevenlabs_audio_buffer', 
+            'elevenlabs_agent_speaking',
+            'elevenlabs_audio_started',
+            'v2v_dialogue',
+            '_memory'
+        ]
+        
+        for attr in attrs_to_clean:
+            if hasattr(conn, attr):
+                delattr(conn, attr)
+

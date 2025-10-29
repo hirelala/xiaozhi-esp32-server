@@ -43,6 +43,7 @@ class TTSProviderBase(ABC):
         self.tts_text_buff = []
         self.punctuations = (
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -50,13 +51,17 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ":",
+            "、",
         )
         self.first_sentence_punctuations = (
             "，",
+            ",",
             "~",
             "、",
             ",",
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -64,6 +69,7 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ":",
         )
         self.tts_stop_request = False
         self.processed_chars = 0
@@ -77,6 +83,15 @@ class TTSProviderBase(ABC):
 
     def handle_opus(self, opus_data: bytes):
         logger.bind(tag=TAG).debug(f"推送数据到队列里面帧数～～ {len(opus_data)}")
+        
+        # 记录第一个音频包生成的时间
+        if hasattr(self, 'tts_first_text_time') and self.tts_first_text_time is not None:
+            tts_response_time = time.time() - self.tts_first_text_time
+            logger.bind(tag=TAG).info(
+                f"🎵 TTS首个音频包生成时间: {tts_response_time:.3f}秒"
+            )
+            self.tts_first_text_time = None  # 只记录一次
+        
         self.tts_audio_queue.put((SentenceType.MIDDLE, opus_data, None))
 
     def handle_audio_file(self, file_audio: bytes, text):
@@ -282,7 +297,12 @@ class TTSProviderBase(ABC):
                     self.tts_text_buff = []
                     self.is_first_sentence = True
                     self.tts_audio_first_sentence = True
+                    self.tts_first_text_time = None  # 重置TTS计时器
                 elif ContentType.TEXT == message.content_type:
+                    # 记录收到第一个文本内容的时间
+                    if self.tts_first_text_time is None:
+                        self.tts_first_text_time = time.time()
+                        logger.bind(tag=TAG).info("📝 TTS收到第一个文本内容，开始计时")
                     self.tts_text_buff.append(message.content_detail)
                     segment_text = self._get_segment_text()
                     if segment_text:

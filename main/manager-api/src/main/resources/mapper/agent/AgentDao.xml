@@ -45,8 +45,10 @@
                a.vllm_model_id     AS vllmModelId,
                a.tts_model_id      AS ttsModelId,
                a.tts_voice_id      AS ttsVoiceId,
-               a.mem_model_id      AS memModelId,
-               a.intent_model_id   AS intentModelId,
+               a.mem_model_id         AS memModelId,
+               a.intent_model_id      AS intentModelId,
+               a.enable_voice2voice   AS enableVoice2voice,
+               a.v2v_model_id         AS v2vModelId,
                COALESCE(
                        (SELECT JSON_ARRAYAGG(
                                        JSON_OBJECT(
