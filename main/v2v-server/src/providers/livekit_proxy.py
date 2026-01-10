@@ -84,10 +84,19 @@ class LiveKitProxy:
             publication: rtc.RemoteTrackPublication,
             participant: rtc.RemoteParticipant
         ):
-            logger.info(f"Track subscribed: {track.kind} from {participant.identity}")
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 audio_stream = rtc.AudioStream(track)
                 asyncio.ensure_future(self._receive_audio_from_livekit(audio_stream))
+        
+        @self.room.on("transcription_received")
+        def on_transcription(segments, participant, publication):
+            for seg in segments:
+                if seg.final and seg.text.strip():
+                    identity = participant.identity if participant else "unknown"
+                    if "agent" in identity.lower():
+                        print(f"🤖 Agent: {seg.text}")
+                    else:
+                        print(f"🎤 User ({identity}): {seg.text}")
         
         token = self._generate_token()
         await self.room.connect(self.livekit_url, token)
@@ -118,8 +127,6 @@ class LiveKitProxy:
         return resampled.tobytes()
 
     async def _receive_audio_from_livekit(self, audio_stream: rtc.AudioStream):
-        logger.info("Starting audio receive from LiveKit agent...")
-        frame_count = 0
         tts_started = False
         
         async for event in audio_stream:
@@ -128,27 +135,18 @@ class LiveKitProxy:
             
             try:
                 audio_frame = event.frame
-                frame_count += 1
-                
-                if frame_count == 1:
-                    logger.info(f"First audio frame received: sample_rate={audio_frame.sample_rate}, "
-                               f"channels={audio_frame.num_channels}, samples={audio_frame.samples_per_channel}")
                 
                 if not tts_started and self.hardware_ws:
                     await self.hardware_ws.send_json({"type": "tts", "state": "start"})
                     tts_started = True
-                    logger.info("Sent TTS start to hardware")
                 
                 pcm_data = bytes(audio_frame.data)
                 if audio_frame.sample_rate != 16000:
                     pcm_data = self._resample_audio(pcm_data, audio_frame.sample_rate, 16000)
                 
                 await self._send_audio_to_hardware(pcm_data)
-                
-                if frame_count % 50 == 0:
-                    logger.info(f"Sent {frame_count} audio frames to hardware")
             except Exception as e:
-                logger.error(f"Error processing audio from LiveKit: {e}", exc_info=True)
+                logger.error(f"Error processing audio from LiveKit: {e}")
 
     async def _send_audio_to_hardware(self, pcm_data: bytes):
         try:
@@ -158,22 +156,15 @@ class LiveKitProxy:
             self.audio_buffer.extend(pcm_data)
             
             frame_size = 1920
-            packets_sent = 0
             while len(self.audio_buffer) >= frame_size:
                 pcm_frame = bytes(self.audio_buffer[:frame_size])
                 self.audio_buffer = self.audio_buffer[frame_size:]
                 
                 opus_data = self.opus_encoder.encode(pcm_frame, 960)
-                
                 await self.hardware_ws.send_bytes(opus_data)
-                packets_sent += 1
-            
-            if packets_sent > 0 and not hasattr(self, '_first_packet_logged'):
-                self._first_packet_logged = True
-                logger.info(f"First opus packet sent to hardware (binary): {len(opus_data)} bytes")
                 
         except Exception as e:
-            logger.error(f"Error sending audio to hardware: {e}", exc_info=True)
+            logger.error(f"Error sending audio to hardware: {e}")
 
     async def send_audio_to_livekit(self, opus_data: bytes):
         try:
