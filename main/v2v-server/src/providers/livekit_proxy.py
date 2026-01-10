@@ -91,12 +91,18 @@ class LiveKitProxy:
         @self.room.on("transcription_received")
         def on_transcription(segments, participant, publication):
             for seg in segments:
-                if seg.final and seg.text.strip():
+                if seg.text.strip():
                     identity = participant.identity if participant else "unknown"
-                    if "agent" in identity.lower():
-                        print(f"🤖 Agent: {seg.text}")
+                    is_agent = "agent" in identity.lower()
+                    
+                    if is_agent:
+                        if seg.final:
+                            print(f"🤖 Agent: {seg.text}")
+                        asyncio.ensure_future(self._send_agent_text(seg.text))
                     else:
-                        print(f"🎤 User ({identity}): {seg.text}")
+                        if seg.final:
+                            print(f"🎤 User ({identity}): {seg.text}")
+                        asyncio.ensure_future(self._send_user_text(seg.text))
         
         token = self._generate_token()
         await self.room.connect(self.livekit_url, token)
@@ -186,6 +192,27 @@ class LiveKitProxy:
             
         except Exception as e:
             logger.error(f"Failed to send audio to LiveKit: {e}")
+
+    async def _send_user_text(self, text: str):
+        if self.hardware_ws:
+            try:
+                await self.hardware_ws.send_json({
+                    "type": "stt",
+                    "text": text
+                })
+            except Exception as e:
+                logger.error(f"Failed to send user text to hardware: {e}")
+
+    async def _send_agent_text(self, text: str):
+        if self.hardware_ws:
+            try:
+                await self.hardware_ws.send_json({
+                    "type": "tts",
+                    "state": "sentence_start",
+                    "text": text
+                })
+            except Exception as e:
+                logger.error(f"Failed to send agent text to hardware: {e}")
 
     async def send_tts_stop(self):
         if self.hardware_ws:
