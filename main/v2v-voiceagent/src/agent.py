@@ -25,9 +25,9 @@ livekit_api_key = os.getenv("LIVEKIT_API_KEY")
 livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
 livekit_agent_name = os.getenv("LIVEKIT_AGENT_NAME", "xiaozhi")
 
-TTS_VOICE = os.getenv("TTS_VOICE", "5ee9feff-1265-424a-9d7f-8e4d431a12c7")
+TTS_VOICE = os.getenv("TTS_VOICE", "32b3f3c5-7171-46aa-abe7-b598964aa793")
 
-system_prompt = os.getenv("SYSTEM_PROMPT", """You are Xiaozhi, a helpful and friendly voice AI assistant.
+system_prompt = os.getenv("SYSTEM_PROMPT", """You are Dana, a helpful and friendly AI talker.
 You assist users with their questions by providing clear, concise, and accurate information.
 Your responses should be natural and conversational, suitable for voice output.
 Keep responses brief and to the point since this is a voice interface.""")
@@ -58,7 +58,7 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Joining room: {ctx.room.name}")
 
     session = AgentSession(
-        stt=inference.STT(model="deepgram/nova-3"),
+        stt=inference.STT(model="assemblyai/universal-streaming"),
         llm=inference.LLM(model="openai/gpt-4o-mini"),
         tts=inference.TTS(model="cartesia/sonic", voice=TTS_VOICE),
         vad=silero.VAD.load(

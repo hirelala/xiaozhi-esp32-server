@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 load_dotenv()
-AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "xiaozhi-agent")
+AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "xiaozhi")
 
 
 class LiveKitProxy:
