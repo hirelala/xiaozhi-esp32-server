@@ -3,6 +3,7 @@ import json
 import base64
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 from fastapi import WebSocket
@@ -134,7 +135,27 @@ class LiveKitProxy:
         return resampled.tobytes()
 
     async def _receive_audio_from_livekit(self, audio_stream: rtc.AudioStream):
-        tts_started = False
+        last_speech_time = 0
+        tts_active = False
+        silence_threshold = 500
+        
+        async def check_tts_timeout():
+            nonlocal tts_active, last_speech_time
+            while self.active:
+                await asyncio.sleep(0.2)
+                if tts_active and last_speech_time > 0:
+                    if time.time() - last_speech_time > 0.8:
+                        tts_active = False
+                        self.is_tts_playing = False
+                        last_speech_time = 0
+                        if self.hardware_ws and self.active:
+                            try:
+                                await self.hardware_ws.send_json({"type": "tts", "state": "stop"})
+                                logger.info("TTS stopped (silence detected)")
+                            except Exception:
+                                pass
+        
+        timeout_task = asyncio.create_task(check_tts_timeout())
         
         try:
             async for event in audio_stream:
@@ -143,14 +164,20 @@ class LiveKitProxy:
                 
                 try:
                     audio_frame = event.frame
-                    
-                    if not tts_started and self.hardware_ws:
-                        self.is_tts_playing = True
-                        await self.hardware_ws.send_json({"type": "tts", "state": "start"})
-                        tts_started = True
-                        logger.info("TTS started")
-                    
                     pcm_data = bytes(audio_frame.data)
+                    
+                    pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
+                    audio_level = np.abs(pcm_array).mean()
+                    
+                    if audio_level > silence_threshold:
+                        last_speech_time = time.time()
+                        
+                        if not tts_active and self.hardware_ws:
+                            tts_active = True
+                            self.is_tts_playing = True
+                            await self.hardware_ws.send_json({"type": "tts", "state": "start"})
+                            logger.info("TTS started")
+                    
                     if audio_frame.sample_rate != 16000:
                         pcm_data = self._resample_audio(pcm_data, audio_frame.sample_rate, 16000)
                     
@@ -158,13 +185,8 @@ class LiveKitProxy:
                 except Exception as e:
                     logger.error(f"Error processing audio from LiveKit: {e}")
         finally:
+            timeout_task.cancel()
             self.is_tts_playing = False
-            if tts_started and self.hardware_ws and self.active:
-                try:
-                    await self.hardware_ws.send_json({"type": "tts", "state": "stop"})
-                    logger.info("TTS stopped")
-                except Exception:
-                    pass
 
     async def _send_audio_to_hardware(self, pcm_data: bytes):
         try:
@@ -189,11 +211,11 @@ class LiveKitProxy:
             if not self.audio_source or not self.active:
                 return
             
+            if self.is_tts_playing:
+                return
+            
             pcm_data = self.opus_decoder.decode(opus_data, frame_size=960)
             pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
-            
-            if self.is_tts_playing:
-                pcm_array = (pcm_array * 0.3).astype(np.int16)
             
             audio_frame = rtc.AudioFrame(
                 data=pcm_array.tobytes(),
