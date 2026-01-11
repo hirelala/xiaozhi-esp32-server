@@ -211,9 +211,6 @@ class LiveKitProxy:
             if not self.audio_source or not self.active:
                 return
             
-            if self.is_tts_playing:
-                return
-            
             pcm_data = self.opus_decoder.decode(opus_data, frame_size=960)
             pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
             
