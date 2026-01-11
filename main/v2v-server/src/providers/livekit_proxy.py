@@ -33,6 +33,7 @@ class LiveKitProxy:
         self.active = False
         self.receive_task = None
         self.participant_identity = f"hardware-{uuid.uuid4().hex[:8]}"
+        self.is_tts_playing = False
 
     def _generate_token(self) -> str:
         token = (
@@ -135,24 +136,35 @@ class LiveKitProxy:
     async def _receive_audio_from_livekit(self, audio_stream: rtc.AudioStream):
         tts_started = False
         
-        async for event in audio_stream:
-            if not self.active:
-                break
-            
-            try:
-                audio_frame = event.frame
+        try:
+            async for event in audio_stream:
+                if not self.active:
+                    break
                 
-                if not tts_started and self.hardware_ws:
-                    await self.hardware_ws.send_json({"type": "tts", "state": "start"})
-                    tts_started = True
-                
-                pcm_data = bytes(audio_frame.data)
-                if audio_frame.sample_rate != 16000:
-                    pcm_data = self._resample_audio(pcm_data, audio_frame.sample_rate, 16000)
-                
-                await self._send_audio_to_hardware(pcm_data)
-            except Exception as e:
-                logger.error(f"Error processing audio from LiveKit: {e}")
+                try:
+                    audio_frame = event.frame
+                    
+                    if not tts_started and self.hardware_ws:
+                        self.is_tts_playing = True
+                        await self.hardware_ws.send_json({"type": "tts", "state": "start"})
+                        tts_started = True
+                        logger.info("TTS started")
+                    
+                    pcm_data = bytes(audio_frame.data)
+                    if audio_frame.sample_rate != 16000:
+                        pcm_data = self._resample_audio(pcm_data, audio_frame.sample_rate, 16000)
+                    
+                    await self._send_audio_to_hardware(pcm_data)
+                except Exception as e:
+                    logger.error(f"Error processing audio from LiveKit: {e}")
+        finally:
+            self.is_tts_playing = False
+            if tts_started and self.hardware_ws and self.active:
+                try:
+                    await self.hardware_ws.send_json({"type": "tts", "state": "stop"})
+                    logger.info("TTS stopped")
+                except Exception:
+                    pass
 
     async def _send_audio_to_hardware(self, pcm_data: bytes):
         try:
@@ -178,9 +190,10 @@ class LiveKitProxy:
                 return
             
             pcm_data = self.opus_decoder.decode(opus_data, frame_size=960)
-            
-            import numpy as np
             pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
+            
+            if self.is_tts_playing:
+                pcm_array = (pcm_array * 0.3).astype(np.int16)
             
             audio_frame = rtc.AudioFrame(
                 data=pcm_array.tobytes(),
@@ -215,11 +228,14 @@ class LiveKitProxy:
                 logger.error(f"Failed to send agent text to hardware: {e}")
 
     async def send_tts_stop(self):
-        if self.hardware_ws:
-            await self.hardware_ws.send_json({
-                "type": "tts",
-                "state": "stop"
-            })
+        if self.hardware_ws and self.active:
+            try:
+                await self.hardware_ws.send_json({
+                    "type": "tts",
+                    "state": "stop"
+                })
+            except Exception:
+                pass
 
     async def disconnect(self):
         self.active = False

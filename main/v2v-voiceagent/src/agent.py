@@ -25,8 +25,6 @@ livekit_api_key = os.getenv("LIVEKIT_API_KEY")
 livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
 livekit_agent_name = os.getenv("LIVEKIT_AGENT_NAME", "xiaozhi")
 
-TTS_VOICE = os.getenv("TTS_VOICE", "32b3f3c5-7171-46aa-abe7-b598964aa793")
-
 system_prompt = os.getenv("SYSTEM_PROMPT", """You are Dana, a helpful and friendly AI talker.
 You assist users with their questions by providing clear, concise, and accurate information.
 Your responses should be natural and conversational, suitable for voice output.
@@ -41,9 +39,7 @@ class VoiceAssistant(Agent):
         logger.info("Voice assistant initialized")
 
     async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions="Greet the user briefly and offer your assistance."
-        )
+        await self.session.say("Hi! How can I help you today?")
 
 
 def prewarm(proc: JobProcess):
@@ -58,14 +54,17 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Joining room: {ctx.room.name}")
 
     session = AgentSession(
-        stt=inference.STT(model="assemblyai/universal-streaming"),
+        stt=inference.STT(model="deepgram/nova-3"),
         llm=inference.LLM(model="openai/gpt-4o-mini"),
-        tts=inference.TTS(model="cartesia/sonic", voice=TTS_VOICE),
+        tts=inference.TTS(
+            model="cartesia/sonic-3",
+            voice="f31cc6a7-c1e8-4764-980c-60a361443dd1",
+        ),
         vad=silero.VAD.load(
-            min_silence_duration=1.0,
-            min_speech_duration=0.15,
-            padding_duration=0.3,
-            activation_threshold=0.4,
+            min_silence_duration=0.5,
+            min_speech_duration=0.1,
+            padding_duration=0.2,
+            activation_threshold=0.35,
         ),
     )
 
