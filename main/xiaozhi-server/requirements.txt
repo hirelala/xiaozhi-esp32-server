@@ -35,4 +35,8 @@ PyJWT==2.8.0
 psutil==7.0.0
 portalocker==3.2.0
 Jinja2==3.1.6
-vosk==0.3.45
+#vosk==0.3.45
+livekit-agents[silero,turn-detector]==1.2.0
+livekit-plugins-noise-cancellation==0.2.0
+livekit-agents[openai]==1.2.0
+elevenlabs==2.20.0

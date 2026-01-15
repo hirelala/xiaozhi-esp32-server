@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from config.logger import setup_logging
-from core.utils import tts, llm, intent, memory, vad, asr
+from core.utils import tts, llm, intent, memory, vad, asr, v2v
 
 TAG = __name__
 logger = setup_logging()
@@ -15,6 +15,7 @@ def initialize_modules(
     init_tts=False,
     init_memory=False,
     init_intent=False,
+    init_v2v=False,
 ) -> Dict[str, Any]:
     """
     初始化所有模块组件
@@ -95,6 +96,21 @@ def initialize_modules(
         select_asr_module = config["selected_module"]["ASR"]
         modules["asr"] = initialize_asr(config)
         logger.bind(tag=TAG).info(f"初始化组件: asr成功 {select_asr_module}")
+
+    # 初始化V2V模块
+    if init_v2v:
+        select_v2v_module = config["selected_module"]["V2V"]
+        v2v_type = (
+            select_v2v_module
+            if "type" not in config["V2V"][select_v2v_module]
+            else config["V2V"][select_v2v_module]["type"]
+        )
+        modules["v2v"] = v2v.create_instance(
+            v2v_type,
+            config["V2V"][select_v2v_module],
+        )
+        logger.bind(tag=TAG).info(f"初始化组件: v2v成功 {select_v2v_module}")
+
     return modules
 
 

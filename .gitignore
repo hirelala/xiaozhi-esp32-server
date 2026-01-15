@@ -146,6 +146,7 @@ tmp
 .history
 .DS_Store
 main/xiaozhi-server/data
+data/
 
 main/manager-web/node_modules
 .config.yaml
@@ -171,6 +172,7 @@ main/manager-api/.vscode
 # Ignore webpack cache directory
 main/manager-web/.webpack_cache/
 main/xiaozhi-server/mysql
+mysql/
 uploadfile
 *.json
 .vscode

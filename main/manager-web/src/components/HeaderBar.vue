@@ -3,8 +3,8 @@
     <div class="header-container">
       <!-- 左侧元素 -->
       <div class="header-left" @click="goHome">
-        <img loading="lazy" alt="" src="@/assets/xiaozhi-logo.png" class="logo-img" />
-        <img loading="lazy" alt="" src="@/assets/xiaozhi-ai.png" class="brand-img" />
+        <img loading="lazy" alt="" src="@/assets/xiaozhi-logo.png" class="logo-img" /> 
+        <span class="brand-text">Console</span>
       </div>
 
       <!-- 中间导航菜单 -->

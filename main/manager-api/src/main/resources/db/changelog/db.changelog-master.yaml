@@ -402,3 +402,17 @@ databaseChangeLog:
         - sqlFile:
             encoding: utf8
             path: classpath:db/changelog/202510191042.sql
+  - changeSet:
+      id: 202510221000
+      author: gary
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202510221000.sql
+  - changeSet:
+      id: 202510221001
+      author: gary
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202510221001.sql

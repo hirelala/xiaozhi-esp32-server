@@ -91,6 +91,7 @@ public class ConfigServiceImpl implements ConfigService {
                 null,
                 null,
                 null,
+                null,
                 result,
                 isCache);
 
@@ -180,6 +181,10 @@ public class ConfigServiceImpl implements ConfigService {
         // 获取声纹信息
         buildVoiceprintConfig(agent.getId(), result);
 
+        // Voice2Voice配置 - 使用snake_case以匹配Python服务器
+        result.put("enable_voice2voice", agent.getEnableVoice2voice() != null ? agent.getEnableVoice2voice() : 0);
+        result.put("v2v_model_id", agent.getV2vModelId());
+
         // 构建模块配置
         buildModuleConfig(
                 agent.getAgentName(),
@@ -195,6 +200,7 @@ public class ConfigServiceImpl implements ConfigService {
                 agent.getTtsModelId(),
                 agent.getMemModelId(),
                 agent.getIntentModelId(),
+                agent.getV2vModelId(),
                 result,
                 true);
 
@@ -371,12 +377,13 @@ public class ConfigServiceImpl implements ConfigService {
             String ttsModelId,
             String memModelId,
             String intentModelId,
+            String v2vModelId,
             Map<String, Object> result,
             boolean isCache) {
         Map<String, String> selectedModule = new HashMap<>();
 
-        String[] modelTypes = { "VAD", "ASR", "TTS", "Memory", "Intent", "LLM", "VLLM" };
-        String[] modelIds = { vadModelId, asrModelId, ttsModelId, memModelId, intentModelId, llmModelId, vllmModelId };
+        String[] modelTypes = { "VAD", "ASR", "TTS", "Memory", "Intent", "LLM", "VLLM", "V2V" };
+        String[] modelIds = { vadModelId, asrModelId, ttsModelId, memModelId, intentModelId, llmModelId, vllmModelId, v2vModelId };
         String intentLLMModelId = null;
         String memLocalShortLLMModelId = null;
 

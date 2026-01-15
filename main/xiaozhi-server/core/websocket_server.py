@@ -97,6 +97,7 @@ class WebSocketServer:
             self._memory,
             self._intent,
             self,  # 传入server实例
+            getattr(self, '_v2v', None),  # 传入V2V实例（如果存在）
         )
         self.active_connections.add(handler)
         try:

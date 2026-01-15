@@ -211,6 +211,14 @@ public class AgentServiceImpl extends BaseServiceImpl<AgentDao, AgentEntity> imp
         if (existingEntity == null) {
             throw new RenException(ErrorCode.AGENT_NOT_FOUND);
         }
+        
+        // Debug logging for V2V fields
+        System.out.println("===== V2V Update Debug =====");
+        System.out.println("Agent ID: " + agentId);
+        System.out.println("DTO enableVoice2voice: " + dto.getEnableVoice2voice());
+        System.out.println("DTO v2vModelId: " + dto.getV2vModelId());
+        System.out.println("Existing enableVoice2voice: " + existingEntity.getEnableVoice2voice());
+        System.out.println("Existing v2vModelId: " + existingEntity.getV2vModelId());
 
         // 只更新提供的非空字段
         if (dto.getAgentName() != null) {
@@ -242,6 +250,15 @@ public class AgentServiceImpl extends BaseServiceImpl<AgentDao, AgentEntity> imp
         }
         if (dto.getIntentModelId() != null) {
             existingEntity.setIntentModelId(dto.getIntentModelId());
+        }
+        // Voice2Voice 配置 - 始终更新，即使是0或空字符串
+        if (dto.getEnableVoice2voice() != null) {
+            existingEntity.setEnableVoice2voice(dto.getEnableVoice2voice());
+        }
+        // 允许设置为空字符串以清除V2V模型
+        if (dto.getV2vModelId() != null) {
+            // 如果是空字符串，设置为null
+            existingEntity.setV2vModelId(dto.getV2vModelId().isEmpty() ? null : dto.getV2vModelId());
         }
         if (dto.getSystemPrompt() != null) {
             existingEntity.setSystemPrompt(dto.getSystemPrompt());
@@ -335,7 +352,18 @@ public class AgentServiceImpl extends BaseServiceImpl<AgentDao, AgentEntity> imp
         if (!b) {
             throw new RenException(ErrorCode.LLM_INTENT_PARAMS_MISMATCH);
         }
+        
+        // Debug logging before save
+        System.out.println("Before save - enableVoice2voice: " + existingEntity.getEnableVoice2voice());
+        System.out.println("Before save - v2vModelId: " + existingEntity.getV2vModelId());
+        
         this.updateById(existingEntity);
+        
+        // Verify the save
+        AgentEntity savedEntity = this.getAgentById(agentId);
+        System.out.println("After save - enableVoice2voice: " + savedEntity.getEnableVoice2voice());
+        System.out.println("After save - v2vModelId: " + savedEntity.getV2vModelId());
+        System.out.println("===== End V2V Update Debug =====");
     }
 
     /**

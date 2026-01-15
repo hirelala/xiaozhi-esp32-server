@@ -70,6 +70,9 @@ public class AgentTemplateServiceImpl extends ServiceImpl<AgentTemplateDao, Agen
             case "INTENT":
                 wrapper.set("intent_model_id", modelId);
                 break;
+            case "V2V":
+                wrapper.set("v2v_model_id", modelId);
+                break;
         }
         wrapper.ge("sort", 0);
         update(wrapper);
